@@ -1,4 +1,5 @@
 :root {
+  color-scheme: dark; /* 让原生控件（数字微调箭头/下拉/滚动条）跟随深色主题 */
   --bg: #181c26;
   --bg-raised: #1f2533;
   --bg-hover: #262d3f;
@@ -422,6 +423,7 @@ body {
 /* ---------- 亮色主题 ---------- */
 
 [data-theme='light'] {
+  color-scheme: light;
   --bg: #f4f6fa;
   --bg-raised: #ffffff;
   --bg-hover: #edf0f7;
