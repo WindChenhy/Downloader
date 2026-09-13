@@ -225,6 +225,7 @@ body {
   border-radius: var(--radius);
   padding: 14px 16px;
   transition: border-color 0.15s;
+  cursor: pointer; /* 点击行内任意处（按钮除外）打开任务详情 */
 }
 
 .task-row:hover {
@@ -249,14 +250,6 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.task-name.clickable {
-  cursor: pointer;
-}
-
-.task-name.clickable:hover {
-  color: var(--accent);
 }
 
 /* 任务详情对话框 */

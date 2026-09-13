@@ -87,14 +87,10 @@ function TaskRow({
   };
 
   return (
-    <div className={`task-row status-${task.status}`}>
+    <div className={`task-row status-${task.status}`} onClick={() => onRequestDetail(task)}>
       <div className="task-main">
         <div className="task-title">
-          <span
-            className="task-name clickable"
-            title={task.url}
-            onClick={() => onRequestDetail(task)}
-          >
+          <span className="task-name" title={task.url}>
             {task.fileName}
           </span>
           <span className={`chip ${meta.cls}`}>{meta.label}</span>
@@ -121,7 +117,7 @@ function TaskRow({
           />
         </div>
       </div>
-      <div className="task-actions">
+      <div className="task-actions" onClick={(e) => e.stopPropagation()}>
         <button className="btn icon" title="打开所在目录" onClick={openFolder}>
           <FolderIcon />
         </button>
