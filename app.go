@@ -67,9 +67,9 @@ func (a *App) startup(ctx context.Context) {
 func (a *App) GetTasks() []engine.Task { return a.mgr.GetTasks() }
 
 // AddTask 新建下载任务；saveDir 为空时使用设置中的默认目录，
-// connections <= 0 时使用默认连接数。
-func (a *App) AddTask(url string, saveDir string, connections int) (engine.Task, error) {
-	return a.mgr.AddTask(url, saveDir, connections)
+// connections <= 0 时使用默认连接数，customName 为空则自动从链接/响应头获取文件名。
+func (a *App) AddTask(url string, saveDir string, connections int, customName string) (engine.Task, error) {
+	return a.mgr.AddTask(url, saveDir, connections, customName)
 }
 
 func (a *App) PauseTask(id string) error  { return a.mgr.PauseTask(id) }
@@ -113,7 +113,7 @@ func (a *App) onSecondInstanceLaunch(data options.SecondInstanceData) {
 	a.ShowWindow()
 	for _, arg := range data.Args {
 		if engine.IsDownloadableURL(arg) {
-			if _, err := a.mgr.AddTask(arg, "", 0); err != nil {
+			if _, err := a.mgr.AddTask(arg, "", 0, ""); err != nil {
 				runtime.LogWarningf(a.ctx, "通过命令行创建任务失败: %v", err)
 			}
 		}

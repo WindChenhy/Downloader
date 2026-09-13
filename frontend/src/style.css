@@ -251,6 +251,66 @@ body {
   white-space: nowrap;
 }
 
+.task-name.clickable {
+  cursor: pointer;
+}
+
+.task-name.clickable:hover {
+  color: var(--accent);
+}
+
+/* 任务详情对话框 */
+.detail-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.detail-row:last-of-type {
+  border-bottom: none;
+}
+
+.detail-label {
+  flex-shrink: 0;
+  width: 64px;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.detail-value {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  word-break: break-all;
+  user-select: text;
+  line-height: 1.6;
+}
+
+.detail-value.mono {
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 12px;
+}
+
+.copy-btn {
+  flex-shrink: 0;
+  padding: 4px;
+  color: var(--text-dim);
+}
+
+.copy-btn:hover {
+  color: var(--accent);
+}
+
+.copied-text {
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--green);
+  white-space: nowrap;
+}
+
 .chip {
   flex-shrink: 0;
   font-size: 11px;

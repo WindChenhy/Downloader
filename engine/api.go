@@ -43,12 +43,13 @@ func (m *Manager) APIHandler() http.Handler {
 			URL         string `json:"url"`
 			SaveDir     string `json:"saveDir"`
 			Connections int    `json:"connections"`
+			FileName    string `json:"fileName"` // 可选：自定义文件名
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeErr(w, http.StatusBadRequest, "无效的请求体")
 			return
 		}
-		t, err := m.AddTask(body.URL, body.SaveDir, body.Connections)
+		t, err := m.AddTask(body.URL, body.SaveDir, body.Connections, body.FileName)
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return

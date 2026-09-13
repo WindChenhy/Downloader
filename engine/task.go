@@ -18,8 +18,9 @@ type Task struct {
 	ID          string    `json:"id"`
 	URL         string    `json:"url"`
 	FileName    string    `json:"fileName"`
+	CustomName  string    `json:"customName,omitempty"` // 用户指定的文件名；空 = 自动获取
 	SaveDir     string    `json:"saveDir"`
-	TotalSize   int64     `json:"totalSize"`   // <=0 表示大小未知
+	TotalSize   int64     `json:"totalSize"` // <=0 表示大小未知
 	Downloaded  int64     `json:"downloaded"`
 	Speed       int64     `json:"speed"` // 字节/秒
 	Status      Status    `json:"status"`

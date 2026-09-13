@@ -151,7 +151,7 @@ func TestManagerMultiChunkDownload(t *testing.T) {
 	defer srv.Close()
 
 	m, saveDir := mustManager(t)
-	task, err := m.AddTask(srv.URL, saveDir, 4)
+	task, err := m.AddTask(srv.URL, saveDir, 4, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestManagerRetryOnServerError(t *testing.T) {
 	defer srv.Close()
 
 	m, saveDir := mustManager(t)
-	if _, err := m.AddTask(srv.URL, saveDir, 2); err != nil {
+	if _, err := m.AddTask(srv.URL, saveDir, 2, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -213,7 +213,7 @@ func TestManagerPauseAndResume(t *testing.T) {
 	defer srv.Close()
 
 	m, saveDir := mustManager(t)
-	task, err := m.AddTask(srv.URL, saveDir, 4)
+	task, err := m.AddTask(srv.URL, saveDir, 4, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +264,7 @@ func TestManagerNoRangeFallback(t *testing.T) {
 	defer srv.Close()
 
 	m, saveDir := mustManager(t)
-	if _, err := m.AddTask(srv.URL, saveDir, 8); err != nil {
+	if _, err := m.AddTask(srv.URL, saveDir, 8, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -372,10 +372,10 @@ func TestManagerResumeFromSeededSidecar(t *testing.T) {
 
 func TestManagerAddTaskValidation(t *testing.T) {
 	m, _ := mustManager(t)
-	if _, err := m.AddTask("ftp://example.com/a.zip", "", 0); err == nil {
+	if _, err := m.AddTask("ftp://example.com/a.zip", "", 0, ""); err == nil {
 		t.Fatal("ftp 协议应被拒绝")
 	}
-	if _, err := m.AddTask("not-a-url", "", 0); err == nil {
+	if _, err := m.AddTask("not-a-url", "", 0, ""); err == nil {
 		t.Fatal("无效 URL 应被拒绝")
 	}
 }
@@ -393,7 +393,7 @@ func TestManagerPersistenceAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.AddTask(srv.URL, saveDir, 4); err != nil {
+	if _, err := m.AddTask(srv.URL, saveDir, 4, ""); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool { return m.GetTasks()[0].Status == StatusRunning }, 5*time.Second)

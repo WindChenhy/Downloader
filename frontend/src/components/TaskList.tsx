@@ -5,10 +5,17 @@ import {formatBytes, formatETA, formatSpeed, percent, statusMeta} from '../lib/f
 import {api} from '../api';
 import {FolderIcon, PauseIcon, PlayIcon, RetryIcon, TrashIcon} from './icons';
 import DeleteTaskDialog from './DeleteTaskDialog';
+import TaskDetailDialog from './TaskDetailDialog';
 
 interface Props {
   tasks: Task[];
   onChanged: () => void;
+}
+
+interface RowActions {
+  onChanged: () => void;
+  onRequestDelete: (t: Task) => void;
+  onRequestDetail: (t: Task) => void;
 }
 
 const FILTERS: {key: 'all' | Status; label: string}[] = [
@@ -39,11 +46,8 @@ function TaskRow({
   task,
   onChanged,
   onRequestDelete,
-}: {
-  task: Task;
-  onChanged: () => void;
-  onRequestDelete: (t: Task) => void;
-}) {
+  onRequestDetail,
+}: RowActions & {task: Task}) {
   const meta = statusMeta[task.status];
   const pct = percent(task);
   const running = task.status === 'running';
@@ -86,7 +90,11 @@ function TaskRow({
     <div className={`task-row status-${task.status}`}>
       <div className="task-main">
         <div className="task-title">
-          <span className="task-name" title={task.url}>
+          <span
+            className="task-name clickable"
+            title={task.url}
+            onClick={() => onRequestDetail(task)}
+          >
             {task.fileName}
           </span>
           <span className={`chip ${meta.cls}`}>{meta.label}</span>
@@ -139,6 +147,7 @@ export default function TaskList({tasks, onChanged}: Props) {
   const [filter, setFilter] = useState<'all' | Status>('all');
   const [query, setQuery] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<Task | null>(null);
+  const [detailTarget, setDetailTarget] = useState<Task | null>(null);
 
   const counts = useMemo(() => {
     const c = new Map<string, number>();
@@ -194,7 +203,13 @@ export default function TaskList({tasks, onChanged}: Props) {
         </div>
       ) : (
         filtered.map((t) => (
-          <TaskRow key={t.id} task={t} onChanged={onChanged} onRequestDelete={setDeleteTarget} />
+          <TaskRow
+            key={t.id}
+            task={t}
+            onChanged={onChanged}
+            onRequestDelete={setDeleteTarget}
+            onRequestDetail={setDetailTarget}
+          />
         ))
       )}
       {deleteTarget && (
@@ -203,6 +218,9 @@ export default function TaskList({tasks, onChanged}: Props) {
           onClose={() => setDeleteTarget(null)}
           onDeleted={onChanged}
         />
+      )}
+      {detailTarget && (
+        <TaskDetailDialog task={detailTarget} onClose={() => setDetailTarget(null)} />
       )}
     </div>
   );

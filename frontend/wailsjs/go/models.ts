@@ -40,6 +40,7 @@ export namespace engine {
 	    id: string;
 	    url: string;
 	    fileName: string;
+	    customName?: string;
 	    saveDir: string;
 	    totalSize: number;
 	    downloaded: number;
@@ -59,6 +60,7 @@ export namespace engine {
 	        this.id = source["id"];
 	        this.url = source["url"];
 	        this.fileName = source["fileName"];
+	        this.customName = source["customName"];
 	        this.saveDir = source["saveDir"];
 	        this.totalSize = source["totalSize"];
 	        this.downloaded = source["downloaded"];

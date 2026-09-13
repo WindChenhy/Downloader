@@ -92,7 +92,11 @@ func (r *taskRunner) run(ctx context.Context) error {
 		}
 	}
 	if fresh {
-		name := sanitizeFileName(probe.FileName)
+		// 命名优先级：用户自定义 > Content-Disposition > URL 路径
+		name := sanitizeFileName(r.task.CustomName)
+		if name == "" {
+			name = sanitizeFileName(probe.FileName)
+		}
 		if name == "" {
 			name = "download"
 		}

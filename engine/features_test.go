@@ -112,7 +112,7 @@ func TestRateLimitSlowsDownload(t *testing.T) {
 	}
 
 	start := time.Now()
-	if _, err := m.AddTask(srv.URL, saveDir, 2); err != nil {
+	if _, err := m.AddTask(srv.URL, saveDir, 2, ""); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
@@ -132,7 +132,7 @@ func TestRateLimitSlowsDownload(t *testing.T) {
 		t.Fatal(err)
 	}
 	start = time.Now()
-	if _, err := m.AddTask(srv.URL, saveDir, 2); err != nil {
+	if _, err := m.AddTask(srv.URL, saveDir, 2, ""); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {

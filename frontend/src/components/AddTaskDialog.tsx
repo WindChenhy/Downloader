@@ -12,6 +12,7 @@ interface Props {
 
 export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: Props) {
   const [url, setUrl] = useState(initialUrl ?? '');
+  const [customName, setCustomName] = useState('');
   const [saveDir, setSaveDir] = useState(settings.saveDir);
   const [connections, setConnections] = useState(settings.connections);
   const [error, setError] = useState('');
@@ -38,7 +39,7 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
     setBusy(true);
     setError('');
     try {
-      await api.addTask(url.trim(), saveDir.trim(), connections);
+      await api.addTask(url.trim(), saveDir.trim(), connections, customName.trim());
       onAdded();
       onClose();
     } catch (e) {
@@ -59,6 +60,15 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
             placeholder="粘贴 http/https 链接"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
+          />
+        </label>
+        <label className="field">
+          <span>重命名（留空自动从链接获取）</span>
+          <input
+            type="text"
+            value={customName}
+            placeholder="可选，如： ubuntu-24.04.iso"
+            onChange={(e) => setCustomName(e.target.value)}
           />
         </label>
         <label className="field">

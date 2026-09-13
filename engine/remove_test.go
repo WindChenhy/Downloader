@@ -21,7 +21,7 @@ func TestRemoveTaskFileHandling(t *testing.T) {
 
 	download := func() (string, string) {
 		t.Helper()
-		if _, err := m.AddTask(srv.URL, saveDir, 2); err != nil {
+		if _, err := m.AddTask(srv.URL, saveDir, 2, ""); err != nil {
 			t.Fatal(err)
 		}
 		waitFor(t, func() bool {

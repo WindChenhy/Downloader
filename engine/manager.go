@@ -77,7 +77,7 @@ func NewManager(dataDir string, notify func(name string, data ...interface{})) (
 	return m, nil
 }
 
-func (m *Manager) AddTask(rawURL, saveDir string, connections int) (Task, error) {
+func (m *Manager) AddTask(rawURL, saveDir string, connections int, customName string) (Task, error) {
 	u, err := validateURL(rawURL)
 	if err != nil {
 		return Task{}, err
@@ -97,17 +97,25 @@ func (m *Manager) AddTask(rawURL, saveDir string, connections int) (Task, error)
 	if connections > MaxConnections {
 		connections = MaxConnections
 	}
+	// 自定义文件名：留空则任务先行用 URL 推断的名字占位，
+	// 运行时优先级为 自定义名 > Content-Disposition > URL 路径
+	custom := sanitizeFileName(strings.TrimSpace(customName))
+	name := custom
+	if name == "" {
+		name = fileNameFromURL(u)
+	}
+	if name == "" {
+		name = "download"
+	}
 	t := Task{
 		ID:          newID(),
 		URL:         rawURL,
-		FileName:    fileNameFromURL(u),
+		FileName:    name,
+		CustomName:  custom,
 		SaveDir:     abs,
 		Status:      StatusQueued,
 		Connections: connections,
 		CreatedAt:   time.Now(),
-	}
-	if t.FileName == "" {
-		t.FileName = "download"
 	}
 	m.handles[t.ID] = &taskHandle{task: t, done: make(chan struct{})}
 	m.order = append(m.order, t.ID)
