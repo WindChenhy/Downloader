@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -28,6 +29,11 @@ func (a *App) startup(ctx context.Context) {
 
 	mgr, err := engine.NewManager(dataDir, func(name string, data ...interface{}) {
 		runtime.EventsEmit(ctx, name, data...)
+		if name == "task:finished" && len(data) > 0 {
+			if t, ok := data[0].(engine.Task); ok {
+				a.notifyTaskFinished(t)
+			}
+		}
 	})
 	if err != nil {
 		runtime.MessageDialog(ctx, runtime.MessageDialogOptions{
@@ -39,6 +45,19 @@ func (a *App) startup(ctx context.Context) {
 		return
 	}
 	a.mgr = mgr
+
+	// 系统通知
+	_ = runtime.InitializeNotifications(ctx)
+	_, _ = runtime.RequestNotificationAuthorization(ctx)
+
+	// 本地 REST API
+	if st := mgr.GetSettings(); st.APIEnabled && st.APIPort > 0 {
+		mgr.StartAPI(fmt.Sprintf("127.0.0.1:%d", st.APIPort))
+	}
+
+	// 剪贴板监听
+	go a.watchClipboard()
+
 	a.initTray()
 }
 

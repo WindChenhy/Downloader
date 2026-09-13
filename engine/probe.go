@@ -37,9 +37,20 @@ func validateURL(raw string) (*url.URL, error) {
 	return u, nil
 }
 
+// IsDownloadableURL 判断一段文本（如剪贴板内容）是否为可下载的 http(s) 链接。
+func IsDownloadableURL(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	raw = strings.Trim(raw, `"'<>()`)
+	if raw == "" || strings.ContainsAny(raw, " \t\r\n") {
+		return false
+	}
+	_, err := validateURL(raw)
+	return err == nil
+}
+
 // probeURL 用一次 HEAD（失败或信息不全时补一次 Range: bytes=0-0 的 GET）
-// 获取文件大小、Range 支持和文件名。
-func probeURL(ctx context.Context, client *http.Client, rawURL string) (*ProbeResult, error) {
+// 获取文件大小、Range 支持和文件名。ua 与 extra 应用到全部探测请求。
+func probeURL(ctx context.Context, client *http.Client, rawURL string, ua string, extra map[string]string) (*ProbeResult, error) {
 	u, err := validateURL(rawURL)
 	if err != nil {
 		return nil, err
@@ -50,7 +61,8 @@ func probeURL(ctx context.Context, client *http.Client, rawURL string) (*ProbeRe
 	if err != nil {
 		return nil, err
 	}
-	head.Header.Set("User-Agent", userAgent)
+	applyExtraHeaders(head, extra)
+	head.Header.Set("User-Agent", ua)
 	if resp, err := client.Do(head); err == nil {
 		drainAndClose(resp)
 		if resp.StatusCode/100 == 2 {
@@ -71,7 +83,8 @@ func probeURL(ctx context.Context, client *http.Client, rawURL string) (*ProbeRe
 		if err != nil {
 			return nil, err
 		}
-		get.Header.Set("User-Agent", userAgent)
+		applyExtraHeaders(get, extra)
+		get.Header.Set("User-Agent", ua)
 		get.Header.Set("Range", "bytes=0-0")
 		resp, err := client.Do(get)
 		if err != nil {

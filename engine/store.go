@@ -67,6 +67,13 @@ const (
 	MaxConnections         = 32
 	DefaultConcurrentTasks = 3
 	MaxConcurrentTasks     = 10
+
+	ProxyNone   = "none"
+	ProxySystem = "system"
+	ProxyCustom = "custom"
+
+	DefaultMirrorTemplate = "https://gh-proxy.com/{url}"
+	DefaultAPIPort        = 8199
 )
 
 // Settings 全局设置。
@@ -74,6 +81,16 @@ type Settings struct {
 	SaveDir         string `json:"saveDir"`
 	Connections     int    `json:"connections"`
 	ConcurrentTasks int    `json:"concurrentTasks"`
+	SpeedLimit      int64  `json:"speedLimit"`     // 全局下载限速，字节/秒，0 不限
+	UserAgent       string `json:"userAgent"`      // 空 = 内置默认 UA
+	ExtraHeaders    string `json:"extraHeaders"`   // 自定义请求头，每行一条 "Key: Value"
+	ProxyMode       string `json:"proxyMode"`      // none | system | custom
+	ProxyURL        string `json:"proxyUrl"`       // custom 模式生效，如 http://127.0.0.1:7890
+	GitHubMirror    bool   `json:"githubMirror"`   // GitHub 链接自动走镜像加速
+	MirrorTemplate  string `json:"mirrorTemplate"` // 镜像模板，{url} 为原始链接
+	ClipboardWatch  bool   `json:"clipboardWatch"` // 剪贴板监听
+	APIEnabled      bool   `json:"apiEnabled"`     // 本地 REST API
+	APIPort         int    `json:"apiPort"`
 }
 
 func defaultSaveDir() string {
@@ -82,6 +99,20 @@ func defaultSaveDir() string {
 		return "."
 	}
 	return filepath.Join(home, "Downloads")
+}
+
+// defaultSettings 首次运行（无设置文件）时的默认值。
+func defaultSettings() Settings {
+	return Settings{
+		SaveDir:         defaultSaveDir(),
+		Connections:     DefaultConnections,
+		ConcurrentTasks: DefaultConcurrentTasks,
+		ProxyMode:       ProxyNone,
+		MirrorTemplate:  DefaultMirrorTemplate,
+		ClipboardWatch:  true,
+		APIEnabled:      true,
+		APIPort:         DefaultAPIPort,
+	}
 }
 
 func (s *Settings) normalize() {
@@ -101,16 +132,55 @@ func (s *Settings) normalize() {
 	if s.ConcurrentTasks > MaxConcurrentTasks {
 		s.ConcurrentTasks = MaxConcurrentTasks
 	}
+	if s.SpeedLimit < 0 {
+		s.SpeedLimit = 0
+	}
+	switch s.ProxyMode {
+	case ProxySystem, ProxyCustom:
+	default:
+		s.ProxyMode = ProxyNone
+	}
+	if strings.TrimSpace(s.MirrorTemplate) == "" {
+		s.MirrorTemplate = DefaultMirrorTemplate
+	}
+	if s.APIPort < 0 {
+		s.APIPort = 0
+	}
+	if s.APIPort > 65535 {
+		s.APIPort = 65535
+	}
+	if s.APIEnabled && s.APIPort == 0 {
+		s.APIPort = DefaultAPIPort
+	}
 }
 
 func (s *Store) LoadSettings() (Settings, error) {
 	var st Settings
-	err := readJSON(s.SettingsPath(), &st)
+	raw, err := os.ReadFile(s.SettingsPath())
 	if errors.Is(err, fs.ErrNotExist) {
-		st, err = Settings{}, nil
+		st = defaultSettings()
+		return st, nil
+	}
+	if err != nil {
+		st = defaultSettings()
+		return st, err
+	}
+	if err := json.Unmarshal(raw, &st); err != nil {
+		st = defaultSettings()
+		return st, err
+	}
+	// 旧版本设置文件没有这些字段：补上首启默认值而不是关掉功能
+	var keys map[string]json.RawMessage
+	if json.Unmarshal(raw, &keys) == nil {
+		if _, ok := keys["clipboardWatch"]; !ok {
+			st.ClipboardWatch = true
+		}
+		if _, ok := keys["apiEnabled"]; !ok {
+			st.APIEnabled = true
+		}
 	}
 	st.normalize()
-	return st, err
+	return st, nil
 }
 
 func (s *Store) SaveSettings(st Settings) error {

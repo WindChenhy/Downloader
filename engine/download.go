@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -42,6 +43,10 @@ type taskRunner struct {
 	h         *taskHandle
 	task      Task // 本地副本，关键字段经 updateTask 写回
 	cancel    context.CancelFunc
+	settings  Settings          // 运行开始时的设置快照
+	fetchURL  string            // 实际请求 URL（可能经过镜像改写）
+	userAgent string            // 本轮使用的 UA
+	extraHeaders map[string]string
 	sidecar   *Sidecar
 	scMu      sync.Mutex
 	dirty     bool
@@ -52,7 +57,16 @@ type taskRunner struct {
 }
 
 func (r *taskRunner) run(ctx context.Context) error {
-	probe, err := probeURL(ctx, r.m.client, r.task.URL)
+	// 运行开始时锁定设置快照：UA/请求头/镜像/代理在本轮内保持一致
+	r.settings = r.m.GetSettings()
+	r.userAgent = strings.TrimSpace(r.settings.UserAgent)
+	if r.userAgent == "" {
+		r.userAgent = defaultUA
+	}
+	r.extraHeaders = parseExtraHeaders(r.settings.ExtraHeaders)
+	r.fetchURL = resolveFetchURL(r.settings, r.task.URL)
+
+	probe, err := probeURL(ctx, r.m.httpClient(), r.fetchURL, r.userAgent, r.extraHeaders)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
 			return ErrPaused
@@ -301,13 +315,14 @@ func (r *taskRunner) downloadChunk(ctx context.Context, c SidecarChunk, live *at
 }
 
 func (r *taskRunner) fetchRange(ctx context.Context, c SidecarChunk, live *atomic.Int64) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.task.URL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.fetchURL, nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", userAgent)
+	applyExtraHeaders(req, r.extraHeaders)
+	req.Header.Set("User-Agent", r.userAgent)
 	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", c.Start, c.End))
-	resp, err := r.m.client.Do(req)
+	resp, err := r.m.httpClient().Do(req)
 	if err != nil {
 		return err
 	}
@@ -316,7 +331,7 @@ func (r *taskRunner) fetchRange(ctx context.Context, c SidecarChunk, live *atomi
 		return fmt.Errorf("服务器返回状态码 %d（需要 206）", resp.StatusCode)
 	}
 	w := &offsetWriter{f: r.partFile, off: c.Start}
-	n, err := io.Copy(w, resp.Body)
+	n, err := io.Copy(w, &limitedReader{r: resp.Body, ctx: ctx, l: r.m.limiter})
 	live.Add(n)
 	if err != nil {
 		return err
@@ -366,15 +381,16 @@ func (r *taskRunner) runSingle(ctx context.Context, live *atomic.Int64) error {
 }
 
 func (r *taskRunner) fetchStream(ctx context.Context, offset int64, live *atomic.Int64) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.task.URL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.fetchURL, nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", userAgent)
+	applyExtraHeaders(req, r.extraHeaders)
+	req.Header.Set("User-Agent", r.userAgent)
 	if offset > 0 {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
 	}
-	resp, err := r.m.client.Do(req)
+	resp, err := r.m.httpClient().Do(req)
 	if err != nil {
 		return err
 	}
@@ -386,7 +402,7 @@ func (r *taskRunner) fetchStream(ctx context.Context, offset int64, live *atomic
 		return fmt.Errorf("服务器返回状态码 %d，无法续传", resp.StatusCode)
 	}
 	w := &offsetWriter{f: r.partFile, off: offset}
-	n, err := io.Copy(w, resp.Body)
+	n, err := io.Copy(w, &limitedReader{r: resp.Body, ctx: ctx, l: r.m.limiter})
 	live.Add(n)
 	if err != nil {
 		return err

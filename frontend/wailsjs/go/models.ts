@@ -4,6 +4,16 @@ export namespace engine {
 	    saveDir: string;
 	    connections: number;
 	    concurrentTasks: number;
+	    speedLimit: number;
+	    userAgent: string;
+	    extraHeaders: string;
+	    proxyMode: string;
+	    proxyUrl: string;
+	    githubMirror: boolean;
+	    mirrorTemplate: string;
+	    clipboardWatch: boolean;
+	    apiEnabled: boolean;
+	    apiPort: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -14,6 +24,16 @@ export namespace engine {
 	        this.saveDir = source["saveDir"];
 	        this.connections = source["connections"];
 	        this.concurrentTasks = source["concurrentTasks"];
+	        this.speedLimit = source["speedLimit"];
+	        this.userAgent = source["userAgent"];
+	        this.extraHeaders = source["extraHeaders"];
+	        this.proxyMode = source["proxyMode"];
+	        this.proxyUrl = source["proxyUrl"];
+	        this.githubMirror = source["githubMirror"];
+	        this.mirrorTemplate = source["mirrorTemplate"];
+	        this.clipboardWatch = source["clipboardWatch"];
+	        this.apiEnabled = source["apiEnabled"];
+	        this.apiPort = source["apiPort"];
 	    }
 	}
 	export class Task {

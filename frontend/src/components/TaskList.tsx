@@ -1,6 +1,6 @@
-import {useEffect, useRef, useState} from 'react';
+import {useEffect, useMemo, useRef, useState} from 'react';
 
-import type {Task} from '../types';
+import type {Status, Task} from '../types';
 import {formatBytes, formatSpeed, percent, statusMeta} from '../lib/format';
 import {api} from '../api';
 
@@ -8,6 +8,15 @@ interface Props {
   tasks: Task[];
   onChanged: () => void;
 }
+
+const FILTERS: {key: 'all' | Status; label: string}[] = [
+  {key: 'all', label: '全部'},
+  {key: 'running', label: '下载中'},
+  {key: 'queued', label: '排队中'},
+  {key: 'paused', label: '已暂停'},
+  {key: 'completed', label: '已完成'},
+  {key: 'failed', label: '失败'},
+];
 
 // 平滑速度显示：引擎每 500ms 推一次原始速率，做轻量指数平滑避免数字跳动
 function useSmoothedSpeed(tasks: Task[]): Map<string, number> {
@@ -119,6 +128,23 @@ function TaskRow({task, onChanged}: {task: Task; onChanged: () => void}) {
 
 export default function TaskList({tasks, onChanged}: Props) {
   useSmoothedSpeed(tasks); // 保持平滑缓存更新
+  const [filter, setFilter] = useState<'all' | Status>('all');
+  const [query, setQuery] = useState('');
+
+  const counts = useMemo(() => {
+    const c = new Map<string, number>();
+    for (const t of tasks) c.set(t.status, (c.get(t.status) ?? 0) + 1);
+    return c;
+  }, [tasks]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return tasks.filter(
+      (t) =>
+        (filter === 'all' || t.status === filter) &&
+        (q === '' || t.fileName.toLowerCase().includes(q) || t.url.toLowerCase().includes(q)),
+    );
+  }, [tasks, filter, query]);
 
   if (tasks.length === 0) {
     return (
@@ -129,11 +155,37 @@ export default function TaskList({tasks, onChanged}: Props) {
       </div>
     );
   }
+
   return (
     <div className="task-list">
-      {tasks.map((t) => (
-        <TaskRow key={t.id} task={t} onChanged={onChanged} />
-      ))}
+      <div className="toolbar">
+        <div className="filter-chips">
+          {FILTERS.map((f) => (
+            <button
+              key={f.key}
+              className={`filter-chip ${filter === f.key ? 'active' : ''}`}
+              onClick={() => setFilter(f.key)}
+            >
+              {f.label}
+              <em>{f.key === 'all' ? tasks.length : counts.get(f.key) ?? 0}</em>
+            </button>
+          ))}
+        </div>
+        <input
+          className="search-input"
+          type="text"
+          placeholder="搜索文件名或链接…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      </div>
+      {filtered.length === 0 ? (
+        <div className="empty small">
+          <p>没有符合条件的项目</p>
+        </div>
+      ) : (
+        filtered.map((t) => <TaskRow key={t.id} task={t} onChanged={onChanged} />)
+      )}
     </div>
   );
 }

@@ -5,16 +5,22 @@ import {api} from '../api';
 
 interface Props {
   settings: Settings;
+  initialUrl?: string;
   onClose: () => void;
   onAdded: () => void;
 }
 
-export default function AddTaskDialog({settings, onClose, onAdded}: Props) {
-  const [url, setUrl] = useState('');
+export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: Props) {
+  const [url, setUrl] = useState(initialUrl ?? '');
   const [saveDir, setSaveDir] = useState(settings.saveDir);
   const [connections, setConnections] = useState(settings.connections);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+
+  // 剪贴板监听推来新链接时更新预填内容
+  useEffect(() => {
+    if (initialUrl) setUrl(initialUrl);
+  }, [initialUrl]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

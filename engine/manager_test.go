@@ -24,9 +24,21 @@ type testServer struct {
 	noRange bool // 模拟不支持 Range 的服务器：忽略 Range 头，始终 200 全量
 
 	mu        sync.Mutex
-	gate      chan struct{} // 非空时阻塞下一个 Range 请求直到被关闭
+	gate      chan struct{} // 非空时阻塞下一个 Range 请求直到释放
 	rangeHits atomic.Int64
 	failNext  atomic.Bool // 下一个 Range 请求返回 500
+}
+
+// releaseGate 放行被阻塞的分段请求；幂等且并发安全：
+// 若 gate 已被某个请求取走（字段被置 nil），该请求会自行感知客户端断开。
+func (s *testServer) releaseGate() {
+	s.mu.Lock()
+	g := s.gate
+	s.gate = nil
+	s.mu.Unlock()
+	if g != nil {
+		close(g)
+	}
 }
 
 func (s *testServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -76,7 +88,11 @@ func (s *testServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.gate = nil
 	s.mu.Unlock()
 	if gate != nil {
-		<-gate
+		// 客户端断开（如暂停取消）时立即返回，避免 handler 泄漏
+		select {
+		case <-gate:
+		case <-r.Context().Done():
+		}
 	}
 
 	w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(s.content)))
@@ -190,6 +206,11 @@ func TestManagerPauseAndResume(t *testing.T) {
 	waitFor(t, func() bool {
 		return m.GetTasks()[0].Status == StatusRunning
 	}, 5*time.Second)
+	// 等 .part 落盘后再暂停，确保测的是"下载中暂停"而不是"探测期取消"
+	waitFor(t, func() bool {
+		_, err := os.Stat(filepath.Join(saveDir, "test.bin.part"))
+		return err == nil
+	}, 5*time.Second)
 	if err := m.PauseTask(m.GetTasks()[0].ID); err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +228,7 @@ func TestManagerPauseAndResume(t *testing.T) {
 	}
 
 	// 放行被阻塞的请求，恢复任务
-	close(ts.gate)
+	ts.releaseGate()
 	if err := m.ResumeTask(m.GetTasks()[0].ID); err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +380,7 @@ func TestManagerPersistenceAcrossRestart(t *testing.T) {
 		t.Fatalf("重启后状态 = %s, want paused", tasks[0].Status)
 	}
 
-	close(ts.gate)
+	ts.releaseGate()
 	if err := m2.ResumeTask(tasks[0].ID); err != nil {
 		t.Fatal(err)
 	}

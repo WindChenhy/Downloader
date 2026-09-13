@@ -36,6 +36,7 @@ type Manager struct {
 	handles  map[string]*taskHandle
 	order    []string // 按创建顺序，保持列表稳定
 	running  int
+	limiter  *rateLimiter
 }
 
 // NewManager 创建管理器并加载磁盘上的任务与设置。
@@ -48,10 +49,11 @@ func NewManager(dataDir string, notify func(name string, data ...interface{})) (
 	}
 	m := &Manager{
 		store:    store,
-		client:   newHTTPClient(),
+		client:   buildHTTPClient(settings),
 		notify:   notify,
 		settings: settings,
 		handles:  make(map[string]*taskHandle),
+		limiter:  newRateLimiter(settings.SpeedLimit),
 	}
 	tasks, err := store.LoadTasks()
 	if err != nil {
@@ -202,8 +204,29 @@ func (m *Manager) SaveSettings(s Settings) error {
 	}
 	m.mu.Lock()
 	m.settings = s
+	m.client = buildHTTPClient(s) // 代理/UA 等即时生效
+	m.limiter.SetLimit(s.SpeedLimit)
 	m.mu.Unlock()
 	return nil
+}
+
+// httpClient 返回当前客户端（保存设置后会被重建，须加锁读取）。
+func (m *Manager) httpClient() *http.Client {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.client
+}
+
+// HasTaskWithURL 报告是否已存在相同 URL 的任务（剪贴板去重用）。
+func (m *Manager) HasTaskWithURL(rawURL string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, h := range m.handles {
+		if h.task.URL == rawURL {
+			return true
+		}
+	}
+	return false
 }
 
 // dispatchLocked 启动排队任务直到占满并发额度。调用方须持有 mu。
@@ -267,8 +290,10 @@ func (m *Manager) finishTask(h *taskHandle, err error) {
 		h.task.Error = err.Error()
 		h.task.Downloaded = m.exactDownloadedLocked(h)
 	}
+	t := h.task
 	m.persistTasksLocked()
 	m.notify("tasks:changed", m.snapshotLocked())
+	m.notify("task:finished", t) // 供系统通知等上层钩子使用
 	m.dispatchLocked()
 }
 
