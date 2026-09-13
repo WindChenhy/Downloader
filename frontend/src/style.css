@@ -146,6 +146,12 @@ body {
   border-color: var(--red);
 }
 
+.btn.confirm-delete {
+  background: var(--red);
+  color: #fff;
+  font-weight: 600;
+}
+
 .btn:disabled {
   opacity: 0.5;
   cursor: default;

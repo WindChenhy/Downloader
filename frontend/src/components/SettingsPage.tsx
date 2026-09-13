@@ -14,6 +14,7 @@ export default function SettingsPage({settings, onSaved, onBack}: Props) {
   const [connections, setConnections] = useState(settings.connections);
   const [concurrentTasks, setConcurrentTasks] = useState(settings.concurrentTasks);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState('');
 
   const save = async () => {
     const next: Settings = {
@@ -23,11 +24,12 @@ export default function SettingsPage({settings, onSaved, onBack}: Props) {
     };
     try {
       await api.saveSettings(next);
+      setError('');
       onSaved(next);
       setSaved(true);
       setTimeout(() => setSaved(false), 1500);
     } catch (e) {
-      alert(`保存失败：${e}`);
+      setError(`保存失败：${e}`);
     }
   };
 
@@ -61,6 +63,7 @@ export default function SettingsPage({settings, onSaved, onBack}: Props) {
       <div className="settings-note">
         关闭窗口时会最小化到系统托盘，任务进度自动保存，重启后可继续未完成的下载。
       </div>
+      {error && <div className="dialog-error">{error}</div>}
       <div className="dialog-actions">
         <button className="btn ghost" onClick={onBack}>
           返回

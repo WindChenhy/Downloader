@@ -1,4 +1,4 @@
-import {useEffect, useRef} from 'react';
+import {useEffect, useRef, useState} from 'react';
 
 import type {Task} from '../types';
 import {formatBytes, formatSpeed, percent, statusMeta} from '../lib/format';
@@ -31,6 +31,16 @@ function TaskRow({task, onChanged}: {task: Task; onChanged: () => void}) {
   const meta = statusMeta[task.status];
   const pct = percent(task);
   const running = task.status === 'running';
+  // Wails WebView 中 window.confirm/alert 不可靠，删除采用两段式确认，错误行内展示
+  const [confirming, setConfirming] = useState(false);
+  const [localErr, setLocalErr] = useState('');
+  const confirmTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(confirmTimer.current), []);
+
+  const showError = (msg: string) => {
+    setLocalErr(msg);
+    window.setTimeout(() => setLocalErr(''), 5000);
+  };
 
   const toggle = async () => {
     try {
@@ -41,21 +51,23 @@ function TaskRow({task, onChanged}: {task: Task; onChanged: () => void}) {
       }
       onChanged();
     } catch (e) {
-      alert(`操作失败：${e}`);
+      showError(`操作失败：${e}`);
     }
   };
 
   const remove = async () => {
-    const msg =
-      task.status === 'completed'
-        ? `确定删除任务「${task.fileName}」？（已下载的文件会保留）`
-        : `确定删除任务「${task.fileName}」？未完成的下载文件将被清除。`;
-    if (!window.confirm(msg)) return;
+    if (!confirming) {
+      setConfirming(true);
+      confirmTimer.current = window.setTimeout(() => setConfirming(false), 2500);
+      return;
+    }
+    window.clearTimeout(confirmTimer.current);
+    setConfirming(false);
     try {
       await api.removeTask(task.id);
       onChanged();
     } catch (e) {
-      alert(`删除失败：${e}`);
+      showError(`删除失败：${e}`);
     }
   };
 
@@ -75,9 +87,9 @@ function TaskRow({task, onChanged}: {task: Task; onChanged: () => void}) {
           </span>
           <span>{task.connections} 连接</span>
           <span className="task-speed">{formatSpeed(task.speed)}</span>
-          {task.status === 'failed' && task.error && (
-            <span className="task-error" title={task.error}>
-              {task.error}
+          {(localErr || (task.status === 'failed' && task.error)) && (
+            <span className="task-error" title={localErr || task.error}>
+              {localErr || task.error}
             </span>
           )}
         </div>
@@ -94,8 +106,11 @@ function TaskRow({task, onChanged}: {task: Task; onChanged: () => void}) {
             {running ? '暂停' : task.status === 'failed' ? '重试' : '继续'}
           </button>
         )}
-        <button className="btn ghost small danger" onClick={remove}>
-          删除
+        <button
+          className={`btn small ${confirming ? 'confirm-delete' : 'ghost danger'}`}
+          onClick={remove}
+        >
+          {confirming ? '确认删除？' : '删除'}
         </button>
       </div>
     </div>
