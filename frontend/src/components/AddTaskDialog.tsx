@@ -1,0 +1,89 @@
+import {useEffect, useState} from 'react';
+
+import type {Settings} from '../types';
+import {api} from '../api';
+
+interface Props {
+  settings: Settings;
+  onClose: () => void;
+  onAdded: () => void;
+}
+
+export default function AddTaskDialog({settings, onClose, onAdded}: Props) {
+  const [url, setUrl] = useState('');
+  const [saveDir, setSaveDir] = useState(settings.saveDir);
+  const [connections, setConnections] = useState(settings.connections);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const submit = async () => {
+    if (!url.trim()) {
+      setError('请输入下载链接');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      await api.addTask(url.trim(), saveDir.trim(), connections);
+      onAdded();
+      onClose();
+    } catch (e) {
+      setError(String(e).replace(/^.*:\s*/, ''));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="dialog">
+        <h2>新建下载</h2>
+        <label className="field">
+          <span>下载链接</span>
+          <textarea
+            autoFocus
+            rows={3}
+            placeholder="粘贴 http/https 链接"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+          />
+        </label>
+        <label className="field">
+          <span>保存到</span>
+          <input
+            type="text"
+            value={saveDir}
+            placeholder="下载目录"
+            onChange={(e) => setSaveDir(e.target.value)}
+          />
+        </label>
+        <label className="field">
+          <span>连接数（1–32，多连接可提速）</span>
+          <input
+            type="number"
+            min={1}
+            max={32}
+            value={connections}
+            onChange={(e) => setConnections(Number(e.target.value))}
+          />
+        </label>
+        {error && <div className="dialog-error">{error}</div>}
+        <div className="dialog-actions">
+          <button className="btn ghost" onClick={onClose} disabled={busy}>
+            取消
+          </button>
+          <button className="btn primary" onClick={submit} disabled={busy}>
+            {busy ? '添加中…' : '开始下载'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
