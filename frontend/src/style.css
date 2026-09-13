@@ -139,13 +139,22 @@ body {
   font-size: 12px;
 }
 
-/* 图标按钮：仅显示 SVG 图标，悬浮有 title 提示 */
+/* 图标按钮：扁平化，无边框无底色，与任务卡片背景融合，悬浮时浮起淡色高亮 */
 .btn.icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 7px;
   line-height: 0;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  color: var(--text-dim);
+}
+
+.btn.icon:hover {
+  background: var(--bg-hover);
+  color: var(--text);
 }
 
 .btn.icon svg {
