@@ -27,6 +27,14 @@ type testServer struct {
 	gate      chan struct{} // 非空时阻塞下一个 Range 请求直到释放
 	rangeHits atomic.Int64
 	failNext  atomic.Bool // 下一个 Range 请求返回 500
+	ranges    []string    // 收到的每个 Range 请求头（断言续传偏移用）
+}
+
+// requestedRanges 返回已记录的 Range 请求头列表。
+func (s *testServer) requestedRanges() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.ranges...)
 }
 
 // releaseGate 放行被阻塞的分段请求；幂等且并发安全：
@@ -79,6 +87,9 @@ func (s *testServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.rangeHits.Add(1)
+	s.mu.Lock()
+	s.ranges = append(s.ranges, rng)
+	s.mu.Unlock()
 	if s.failNext.CompareAndSwap(true, false) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -282,8 +293,8 @@ func TestManagerResumeFromSeededSidecar(t *testing.T) {
 
 	const id = "fixed-id"
 	chunks := CalculateChunks(10000, 4) // 4 段,每段 2500
-	// .part 已包含全部内容,sidecar 标记第 0、2 段完成——
-	// 恢复后服务器只应收到第 1、3 段的请求
+	// .part 已包含全部内容,sidecar 标记第 0、2 段完成、第 1 段收到 1000 字节——
+	// 恢复后服务器只应收到:第 1 段的 bytes=3500-4999 与第 3 段的 bytes=7500-9999
 	if err := os.WriteFile(filepath.Join(saveDir, "test.bin.part"), content, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +303,7 @@ func TestManagerResumeFromSeededSidecar(t *testing.T) {
 		TotalSize: 10000,
 		Chunks: []SidecarChunk{
 			{Start: chunks[0].Start, End: chunks[0].End, Done: true},
-			{Start: chunks[1].Start, End: chunks[1].End},
+			{Start: chunks[1].Start, End: chunks[1].End, Received: 1000},
 			{Start: chunks[2].Start, End: chunks[2].End, Done: true},
 			{Start: chunks[3].Start, End: chunks[3].End},
 		},
@@ -321,6 +332,24 @@ func TestManagerResumeFromSeededSidecar(t *testing.T) {
 
 	if hits := ts.rangeHits.Load(); hits != 2 {
 		t.Fatalf("续传应只请求缺失的 2 个分段, 实际请求 %d 次", hits)
+	}
+	// 字节级续传断言：第 1 段必须从已收的 1000 字节偏移继续，而不是整段重来
+	ranges := ts.requestedRanges()
+	want := map[string]bool{
+		"bytes=3500-4999": false,
+		"bytes=7500-9999": false,
+	}
+	for _, rng := range ranges {
+		if _, ok := want[rng]; ok {
+			want[rng] = true
+		} else {
+			t.Errorf("收到非预期的 Range 请求: %q", rng)
+		}
+	}
+	for rng, seen := range want {
+		if !seen {
+			t.Errorf("缺少预期的 Range 请求: %q (实际: %v)", rng, ranges)
+		}
 	}
 	got, err := os.ReadFile(filepath.Join(saveDir, "test.bin"))
 	if err != nil {

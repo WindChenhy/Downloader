@@ -245,9 +245,11 @@ func (m *Manager) dispatchLocked() {
 		h := m.handles[nextID]
 		h.task.Status = StatusRunning
 		h.task.Error = ""
-		h.base = 0
+		// 基准先取任务已记录的进度：probe 期间界面不闪回 0，
+		// runner 探测完成后会用续传状态里的精确值覆盖
+		h.base = h.task.Downloaded
 		h.live.Store(0)
-		h.prev = 0
+		h.prev = h.task.Downloaded
 		h.prevAt = time.Now()
 		m.running++
 
@@ -307,7 +309,7 @@ func (m *Manager) exactDownloadedLocked(h *taskHandle) int64 {
 			}
 			return 0
 		}
-		return sc.DoneBytes()
+		return sc.ProgressBytes()
 	}
 	return h.base + h.live.Load()
 }

@@ -17,19 +17,45 @@ type Sidecar struct {
 }
 
 // SidecarChunk 一个分段的续传状态，[Start, End] 为闭区间。
-// 分段粒度续传：分段内中断则整段重下（v1 约定）。
+// Received 记录段内已落盘的字节数：暂停/重试/恢复都从这里接着下（字节级续传）。
 type SidecarChunk struct {
-	Start int64 `json:"start"`
-	End   int64 `json:"end"` // 大小未知时为 -1
-	Done  bool  `json:"done"`
+	Start    int64 `json:"start"`
+	End      int64 `json:"end"` // 大小未知时为 -1
+	Done     bool  `json:"done"`
+	Received int64 `json:"received,omitempty"`
+}
+
+// Size 返回分段总字节数。
+func (c SidecarChunk) Size() int64 {
+	if c.End < c.Start {
+		return 0
+	}
+	return c.End - c.Start + 1
 }
 
 func (s *Sidecar) DoneBytes() int64 {
 	var n int64
 	for _, c := range s.Chunks {
-		if c.Done && c.End >= c.Start {
-			n += c.End - c.Start + 1
+		if c.Done {
+			n += c.Size()
 		}
+	}
+	return n
+}
+
+// ProgressBytes 已下载字节数 = 完成分段 + 未完成分段内已落盘的部分。
+func (s *Sidecar) ProgressBytes() int64 {
+	var n int64
+	for _, c := range s.Chunks {
+		if c.Done {
+			n += c.Size()
+			continue
+		}
+		if c.Received > c.Size() {
+			n += c.Size()
+			continue
+		}
+		n += c.Received
 	}
 	return n
 }

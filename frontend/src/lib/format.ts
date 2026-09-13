@@ -17,6 +17,16 @@ export function formatSpeed(bytesPerSec: number): string {
   return `${formatBytes(bytesPerSec)}/s`;
 }
 
+export function formatETA(seconds: number): string {
+  if (!seconds || seconds <= 0 || !isFinite(seconds)) return '';
+  const s = Math.round(seconds);
+  if (s < 60) return `${s} 秒`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} 分 ${s % 60} 秒`;
+  const h = Math.floor(m / 60);
+  return `${h} 小时 ${m % 60} 分`;
+}
+
 export function percent(task: {downloaded: number; totalSize: number; status: Status}): number {
   if (task.status === 'completed') return 100;
   if (task.totalSize <= 0) return 0;

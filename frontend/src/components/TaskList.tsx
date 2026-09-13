@@ -1,7 +1,7 @@
 import {useEffect, useMemo, useRef, useState} from 'react';
 
 import type {Status, Task} from '../types';
-import {formatBytes, formatSpeed, percent, statusMeta} from '../lib/format';
+import {formatBytes, formatETA, formatSpeed, percent, statusMeta} from '../lib/format';
 import {api} from '../api';
 
 interface Props {
@@ -40,6 +40,11 @@ function TaskRow({task, onChanged}: {task: Task; onChanged: () => void}) {
   const meta = statusMeta[task.status];
   const pct = percent(task);
   const running = task.status === 'running';
+  // 剩余时间 = 未下载字节 / 当前速度
+  const eta =
+    running && task.totalSize > 0 && task.speed > 0
+      ? Math.round((task.totalSize - task.downloaded) / task.speed)
+      : 0;
   // Wails WebView 中 window.confirm/alert 不可靠，删除采用两段式确认，错误行内展示
   const [confirming, setConfirming] = useState(false);
   const [localErr, setLocalErr] = useState('');
@@ -94,8 +99,10 @@ function TaskRow({task, onChanged}: {task: Task; onChanged: () => void}) {
             {formatBytes(task.downloaded)}
             {task.totalSize > 0 ? ` / ${formatBytes(task.totalSize)}` : ''}
           </span>
+          {task.totalSize > 0 && <span className="task-pct">{pct}%</span>}
           <span>{task.connections} 连接</span>
-          <span className="task-speed">{formatSpeed(task.speed)}</span>
+          {running && <span className="task-speed">{formatSpeed(task.speed) || '—'}</span>}
+          {running && eta > 0 && <span>剩余 {formatETA(eta)}</span>}
           {(localErr || (task.status === 'failed' && task.error)) && (
             <span className="task-error" title={localErr || task.error}>
               {localErr || task.error}

@@ -25,14 +25,19 @@ const (
 )
 
 // offsetWriter 从固定偏移写入文件，供 io.Copy 流式落盘使用。
+// onWrite 在每次成功写入后被调用（用于把段内进度记入续传状态）。
 type offsetWriter struct {
-	f   *os.File
-	off int64
+	f       *os.File
+	off     int64
+	onWrite func(n int64)
 }
 
 func (w *offsetWriter) Write(p []byte) (int, error) {
 	n, err := w.f.WriteAt(p, w.off)
 	w.off += int64(n)
+	if n > 0 && w.onWrite != nil {
+		w.onWrite(int64(n))
+	}
 	return n, err
 }
 
@@ -138,7 +143,8 @@ func (r *taskRunner) run(ctx context.Context) error {
 			r.m.setBase(r.h, st.Size())
 		}
 	} else {
-		r.m.setBase(r.h, r.sidecar.DoneBytes())
+		// 基准含未完成分段内的部分进度：恢复后进度条直接回到真实位置
+		r.m.setBase(r.h, r.sidecar.ProgressBytes())
 	}
 
 	// 定期把续传状态落盘，崩溃/断电后最多丢 sidecarFlushEvery 的记录
@@ -217,7 +223,7 @@ func (r *taskRunner) tryLoadSidecar(p *ProbeResult) *Sidecar {
 	return sc
 }
 
-// runMulti 多连接分段下载：预分配文件，分段投喂给 worker 池。
+// runMulti 多连接分段下载：预分配文件，未完成分段（含段内部分进度）投喂给 worker 池。
 func (r *taskRunner) runMulti(ctx context.Context, live *atomic.Int64) error {
 	if r.sidecar.TotalSize <= 0 {
 		return errors.New("分段下载缺少文件大小")
@@ -225,14 +231,17 @@ func (r *taskRunner) runMulti(ctx context.Context, live *atomic.Int64) error {
 	if err := r.partFile.Truncate(r.sidecar.TotalSize); err != nil {
 		return err
 	}
-	pending := make(chan SidecarChunk, len(r.sidecar.Chunks))
+	r.scMu.Lock()
+	pending := make(chan int, len(r.sidecar.Chunks))
 	np := 0
-	for _, c := range r.sidecar.Chunks {
-		if !c.Done {
-			pending <- c
+	for i := range r.sidecar.Chunks {
+		c := r.sidecar.Chunks[i]
+		if !c.Done && c.Received < c.Size() {
+			pending <- i
 			np++
 		}
 	}
+	r.scMu.Unlock()
 	close(pending)
 	if np == 0 {
 		return nil
@@ -260,14 +269,13 @@ func (r *taskRunner) runMulti(ctx context.Context, live *atomic.Int64) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for c := range pending {
-				if err := r.downloadChunk(ctx, c, live); err != nil {
+			for idx := range pending {
+				if err := r.downloadChunk(ctx, idx, live); err != nil {
 					if !errors.Is(err, context.Canceled) {
 						fail(err)
 					}
 					return
 				}
-				r.markChunkDone(c)
 				completed.Add(1)
 			}
 		}()
@@ -286,8 +294,8 @@ func (r *taskRunner) runMulti(ctx context.Context, live *atomic.Int64) error {
 	return nil
 }
 
-// downloadChunk 带指数退避重试地下载单个分段。
-func (r *taskRunner) downloadChunk(ctx context.Context, c SidecarChunk, live *atomic.Int64) error {
+// downloadChunk 带指数退避重试地下载单个分段；每次重试都从段内已收偏移继续。
+func (r *taskRunner) downloadChunk(ctx context.Context, idx int, live *atomic.Int64) error {
 	backoff := initialBackoff
 	var lastErr error
 	for attempt := 0; attempt < maxRetries; attempt++ {
@@ -302,7 +310,7 @@ func (r *taskRunner) downloadChunk(ctx context.Context, c SidecarChunk, live *at
 				backoff = maxBackoff
 			}
 		}
-		err := r.fetchRange(ctx, c, live)
+		err := r.fetchRange(ctx, idx, live)
 		if err == nil {
 			return nil
 		}
@@ -314,14 +322,47 @@ func (r *taskRunner) downloadChunk(ctx context.Context, c SidecarChunk, live *at
 	return lastErr
 }
 
-func (r *taskRunner) fetchRange(ctx context.Context, c SidecarChunk, live *atomic.Int64) error {
+// chunkAt 读取分段当前状态（含段内已收字节数）的快照。
+func (r *taskRunner) chunkAt(idx int) SidecarChunk {
+	r.scMu.Lock()
+	defer r.scMu.Unlock()
+	return r.sidecar.Chunks[idx]
+}
+
+// addChunkProgress 累计分段内已落盘字节数（由 offsetWriter 回调触发）。
+func (r *taskRunner) addChunkProgress(idx int, n int64) {
+	r.scMu.Lock()
+	r.sidecar.Chunks[idx].Received += n
+	r.dirty = true
+	r.scMu.Unlock()
+}
+
+func (r *taskRunner) markChunkDone(idx int) {
+	r.scMu.Lock()
+	r.sidecar.Chunks[idx].Done = true
+	r.sidecar.Chunks[idx].Received = r.sidecar.Chunks[idx].Size()
+	r.dirty = true
+	r.scMu.Unlock()
+}
+
+// fetchRange 下载一个分段：从段内已收偏移（字节级断点）续传到段尾。
+func (r *taskRunner) fetchRange(ctx context.Context, idx int, live *atomic.Int64) error {
+	c := r.chunkAt(idx)
+	if c.Done {
+		return nil
+	}
+	start := c.Start + c.Received
+	if start > c.End {
+		r.markChunkDone(idx)
+		return nil
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.fetchURL, nil)
 	if err != nil {
 		return err
 	}
 	applyExtraHeaders(req, r.extraHeaders)
 	req.Header.Set("User-Agent", r.userAgent)
-	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", c.Start, c.End))
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, c.End))
 	resp, err := r.m.httpClient().Do(req)
 	if err != nil {
 		return err
@@ -330,15 +371,18 @@ func (r *taskRunner) fetchRange(ctx context.Context, c SidecarChunk, live *atomi
 	if resp.StatusCode != http.StatusPartialContent {
 		return fmt.Errorf("服务器返回状态码 %d（需要 206）", resp.StatusCode)
 	}
-	w := &offsetWriter{f: r.partFile, off: c.Start}
+	w := &offsetWriter{f: r.partFile, off: start, onWrite: func(n int64) {
+		r.addChunkProgress(idx, n)
+		live.Add(n) // 每个写入块实时计入进度，而不是等整段完成
+	}}
 	n, err := io.Copy(w, &limitedReader{r: resp.Body, ctx: ctx, l: r.m.limiter})
-	live.Add(n)
 	if err != nil {
 		return err
 	}
-	if want := c.End - c.Start + 1; n != want {
-		return fmt.Errorf("分段 [%d,%d] 只收到 %d/%d 字节", c.Start, c.End, n, want)
+	if start+n != c.End+1 {
+		return fmt.Errorf("分段 [%d,%d] 只收到 %d/%d 字节", c.Start, c.End, start+n-c.Start, c.Size())
 	}
+	r.markChunkDone(idx)
 	return nil
 }
 
@@ -401,9 +445,8 @@ func (r *taskRunner) fetchStream(ctx context.Context, offset int64, live *atomic
 	default:
 		return fmt.Errorf("服务器返回状态码 %d，无法续传", resp.StatusCode)
 	}
-	w := &offsetWriter{f: r.partFile, off: offset}
+	w := &offsetWriter{f: r.partFile, off: offset, onWrite: func(n int64) { live.Add(n) }}
 	n, err := io.Copy(w, &limitedReader{r: resp.Body, ctx: ctx, l: r.m.limiter})
-	live.Add(n)
 	if err != nil {
 		return err
 	}
@@ -411,18 +454,6 @@ func (r *taskRunner) fetchStream(ctx context.Context, offset int64, live *atomic
 		return fmt.Errorf("下载不完整：%d/%d 字节", offset+n, r.task.TotalSize)
 	}
 	return nil
-}
-
-func (r *taskRunner) markChunkDone(c SidecarChunk) {
-	r.scMu.Lock()
-	defer r.scMu.Unlock()
-	for i := range r.sidecar.Chunks {
-		if r.sidecar.Chunks[i].Start == c.Start && r.sidecar.Chunks[i].End == c.End {
-			r.sidecar.Chunks[i].Done = true
-			break
-		}
-	}
-	r.dirty = true
 }
 
 func (r *taskRunner) flushSidecar() {

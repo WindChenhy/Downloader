@@ -13,6 +13,8 @@ const defaultUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) downloader/1.0"
 
 // buildHTTPClient 只对建连/TLS/响应头设超时，不对响应体设整体超时——
 // 大文件慢速传输不应该被一个端到端超时杀掉（旧实现的缺陷）。
+// 刻意禁用 HTTP/2：多连接分段下载必须让每个分段独占一条 TCP 连接才能
+// 聚合带宽；H2 会把全部分段多路复用进单条 TCP，慢速链路上互相拖累。
 // 代理模式随设置即时生效（保存设置时重建客户端）。
 func buildHTTPClient(st Settings) *http.Client {
 	transport := &http.Transport{
@@ -20,9 +22,9 @@ func buildHTTPClient(st Settings) *http.Client {
 			Timeout:   15 * time.Second,
 			KeepAlive: 30 * time.Second,
 		}).DialContext,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          100,
-		MaxIdleConnsPerHost:   32,
+		ForceAttemptHTTP2:     false,
+		MaxIdleConns:          128,
+		MaxIdleConnsPerHost:   64,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   15 * time.Second,
 		ResponseHeaderTimeout: 30 * time.Second,

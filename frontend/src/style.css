@@ -251,6 +251,12 @@ body {
   margin-bottom: 8px;
 }
 
+.task-pct {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
 .task-speed {
   color: var(--accent);
 }
