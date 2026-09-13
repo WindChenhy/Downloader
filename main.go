@@ -26,6 +26,11 @@ func main() {
 		},
 		BackgroundColour: &options.RGBA{R: 24, G: 28, B: 38, A: 1},
 		OnStartup:        app.startup,
+		// 单实例锁：第二个实例启动时自动退出，并由首个实例唤起主窗口
+		SingleInstanceLock: &options.SingleInstanceLock{
+			UniqueId:              "downloader-single-instance-7c1f4a92",
+			OnSecondInstanceLaunch: app.onSecondInstanceLaunch,
+		},
 		Bind: []interface{}{
 			app,
 		},

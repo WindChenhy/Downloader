@@ -9,6 +9,7 @@ import (
 
 	"downloader/engine"
 
+	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -101,6 +102,22 @@ func (a *App) OpenFolder(saveDir string, fileName string) error {
 		return exec.Command("explorer", "/select,"+target).Start()
 	}
 	return exec.Command("explorer", dir).Start()
+}
+
+// onSecondInstanceLaunch 用户再次双击 exe 时被首个实例调用：
+// 唤起主窗口；若第二个实例携带了下载链接参数，则自动创建任务。
+func (a *App) onSecondInstanceLaunch(data options.SecondInstanceData) {
+	if a.mgr == nil {
+		return
+	}
+	a.ShowWindow()
+	for _, arg := range data.Args {
+		if engine.IsDownloadableURL(arg) {
+			if _, err := a.mgr.AddTask(arg, "", 0); err != nil {
+				runtime.LogWarningf(a.ctx, "通过命令行创建任务失败: %v", err)
+			}
+		}
+	}
 }
 
 // Quit 退出整个程序（托盘菜单使用）。
