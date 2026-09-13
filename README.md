@@ -95,4 +95,4 @@ frontend/src             React + TypeScript 界面
 
 - 任务列表与设置：`%APPDATA%\downloader\`（`tasks.json`、`settings.json`）
 - 续传状态：`%APPDATA%\downloader\state\<任务ID>.json`
-- 下载数据：`<保存目录>\<文件名>.part`，完成后原地改名
+- 下载中的暂存数据：`<保存目录>\.downloader\<任务ID>.part`——下载过程不再散落 `.part` 文件在下载目录里；完成后同盘原地改名到保存目录，暂存目录自动清空移除；启动时自动清理不属于任何任务的孤儿暂存文件（旧版本直接放保存目录的 `<文件名>.part` 也会在启动时自动迁移）

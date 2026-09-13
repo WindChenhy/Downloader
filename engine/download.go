@@ -80,13 +80,15 @@ func (r *taskRunner) run(ctx context.Context) error {
 	}
 
 	r.statePath = r.m.store.StatePath(r.task.ID)
+	// 暂存文件按任务 ID 命名、放在保存目录的 .downloader 子目录内：
+	// 与最终文件名解耦（改名/重名检测都不影响），且同盘完成时原地改名
+	r.partPath = r.m.stagingPath(r.task.SaveDir, r.task.ID)
 	sc := r.tryLoadSidecar(probe)
 	fresh := sc == nil
 	if !fresh {
 		r.sidecar = sc
-		r.partPath = filepath.Join(r.task.SaveDir, r.task.FileName+".part")
 		if _, err := os.Stat(r.partPath); err != nil {
-			fresh = true // .part 丢失，只能从头开始
+			fresh = true // 暂存数据丢失，只能从头开始
 		}
 	}
 	if fresh {
@@ -96,7 +98,6 @@ func (r *taskRunner) run(ctx context.Context) error {
 		}
 		name = uniqueName(r.task.SaveDir, name)
 		r.task.FileName = name
-		r.partPath = filepath.Join(r.task.SaveDir, name+".part")
 		r.sidecar = newSidecar(r.task.URL, probe, r.task.Connections)
 		r.resuming = false
 	} else {
@@ -112,7 +113,7 @@ func (r *taskRunner) run(ctx context.Context) error {
 		r.sidecar.TotalSize = total
 	}
 
-	if err := os.MkdirAll(r.task.SaveDir, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(r.partPath), 0o755); err != nil {
 		return err
 	}
 	r.m.updateTask(r.h, func(t *Task) {
@@ -474,7 +475,7 @@ func (r *taskRunner) saveSidecar() {
 	_ = saveSidecar(r.statePath, r.sidecar)
 }
 
-// finishFile 关闭 .part 并改名为正式文件。
+// finishFile 关闭暂存数据并改名为正式文件（同盘原地改名，瞬时完成）。
 func (r *taskRunner) finishFile() error {
 	if r.partFile != nil {
 		_ = r.partFile.Sync()
@@ -482,7 +483,12 @@ func (r *taskRunner) finishFile() error {
 		r.partFile = nil
 	}
 	final := filepath.Join(r.task.SaveDir, uniqueName(r.task.SaveDir, r.task.FileName))
-	return os.Rename(r.partPath, final)
+	if err := os.Rename(r.partPath, final); err != nil {
+		return err
+	}
+	// 暂存目录已空则移除（其他任务共用时删除失败，忽略）
+	_ = os.Remove(filepath.Dir(r.partPath))
+	return nil
 }
 
 // uniqueName 目录下同名文件存在时追加 " (n)" 后缀。

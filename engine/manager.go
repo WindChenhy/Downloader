@@ -69,6 +69,9 @@ func NewManager(dataDir string, notify func(name string, data ...interface{})) (
 		m.order = append(m.order, t.ID)
 	}
 	m.persistTasksLocked()
+	m.mu.Lock()
+	m.cleanupOrphanStagingLocked()
+	m.mu.Unlock()
 	go m.progressLoop()
 	m.dispatchLocked()
 	return m, nil
@@ -181,13 +184,14 @@ func (m *Manager) RemoveTask(id string, deleteFiles bool) error {
 	m.changedLocked()
 	m.mu.Unlock()
 
-	// 未完成的 .part 属于下载数据而非成果文件，随记录一起清理；
+	// 未完成的暂存数据（.downloader/<任务ID>.part）随记录一起清理；
 	// 正式文件是否删除由 deleteFiles 决定
-	_ = os.Remove(filepath.Join(t.SaveDir, t.FileName+".part"))
+	_ = os.Remove(m.stagingPath(t.SaveDir, t.ID))
 	if deleteFiles {
 		_ = os.Remove(filepath.Join(t.SaveDir, t.FileName))
 	}
 	_ = os.Remove(m.store.StatePath(id))
+	_ = os.Remove(m.stagingDir(t.SaveDir)) // 暂存目录已空则一并移除
 	return nil
 }
 
@@ -305,12 +309,24 @@ func (m *Manager) finishTask(h *taskHandle, err error) {
 	m.dispatchLocked()
 }
 
+// stagingDir 任务的下载暂存目录：<保存目录>/.downloader。
+// 刻意放在保存目录同盘而非系统临时目录——完成后的"移动"是同盘原地
+// 改名（瞬时）；放系统盘会导致跨盘改名退化为整文件复制。
+// 点前缀命名避免被用户顺手误删，下载中的数据不再散落在下载目录里。
+func (m *Manager) stagingDir(saveDir string) string {
+	return filepath.Join(saveDir, ".downloader")
+}
+
+func (m *Manager) stagingPath(saveDir, taskID string) string {
+	return filepath.Join(m.stagingDir(saveDir), taskID+".part")
+}
+
 // exactDownloadedLocked 从磁盘上的续传状态精确计算已下载字节数
 // （进度快照中的 base+live 含被丢弃的分段局部重试字节，仅用于展示）。
 func (m *Manager) exactDownloadedLocked(h *taskHandle) int64 {
 	if sc, err := loadSidecar(m.store.StatePath(h.task.ID)); err == nil {
 		if sc.Single {
-			if st, err := os.Stat(filepath.Join(h.task.SaveDir, h.task.FileName+".part")); err == nil {
+			if st, err := os.Stat(m.stagingPath(h.task.SaveDir, h.task.ID)); err == nil {
 				return st.Size()
 			}
 			return 0
@@ -318,6 +334,41 @@ func (m *Manager) exactDownloadedLocked(h *taskHandle) int64 {
 		return sc.ProgressBytes()
 	}
 	return h.base + h.live.Load()
+}
+
+// cleanupOrphanStagingLocked 清理各暂存目录中不再属于任何现存任务的
+// 孤儿 part 文件（任务记录被外部删除等遗留），并移除清空后的暂存目录。
+// 调用方须持有 mu；仅在启动时执行一次。
+func (m *Manager) cleanupOrphanStagingLocked() {
+	keep := map[string]map[string]bool{} // 暂存目录 -> 应保留的文件名集合
+	// 旧版本把 part 放在保存目录（<文件名>.part），迁移到暂存目录，
+	// 避免升级后已暂停任务从头重下
+	for _, h := range m.handles {
+		legacy := filepath.Join(h.task.SaveDir, h.task.FileName+".part")
+		if _, err := os.Stat(legacy); err == nil {
+			_ = os.MkdirAll(m.stagingDir(h.task.SaveDir), 0o755)
+			_ = os.Rename(legacy, m.stagingPath(h.task.SaveDir, h.task.ID))
+		}
+	}
+	for _, h := range m.handles {
+		dir := m.stagingDir(h.task.SaveDir)
+		if keep[dir] == nil {
+			keep[dir] = map[string]bool{}
+		}
+		keep[dir][h.task.ID+".part"] = true
+	}
+	for dir, kept := range keep {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue // 目录尚不存在
+		}
+		for _, e := range entries {
+			if !kept[e.Name()] {
+				_ = os.Remove(filepath.Join(dir, e.Name()))
+			}
+		}
+		_ = os.Remove(dir) // 已清空则一并移除；非空则失败忽略
+	}
 }
 
 func (m *Manager) snapshotLocked() []Task {

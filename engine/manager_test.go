@@ -167,9 +167,12 @@ func TestManagerMultiChunkDownload(t *testing.T) {
 	if string(got) != string(content) {
 		t.Fatal("下载内容与原始内容不一致")
 	}
-	// 完成后应清理状态文件与 .part
-	if _, err := os.Stat(filepath.Join(saveDir, "test.bin.part")); !os.IsNotExist(err) {
-		t.Fatal(".part 文件应被改名移除")
+	// 完成后应清理状态文件与暂存数据，暂存目录也应移除
+	if _, err := os.Stat(m.stagingPath(saveDir, task.ID)); !os.IsNotExist(err) {
+		t.Fatal("暂存数据文件应被改名移除")
+	}
+	if _, err := os.Stat(m.stagingDir(saveDir)); !os.IsNotExist(err) {
+		t.Fatal("完成后的暂存目录应被移除")
 	}
 	if _, err := os.Stat(m.store.StatePath(task.ID)); !os.IsNotExist(err) {
 		t.Fatal("完成后的 sidecar 状态文件应被删除")
@@ -210,16 +213,18 @@ func TestManagerPauseAndResume(t *testing.T) {
 	defer srv.Close()
 
 	m, saveDir := mustManager(t)
-	if _, err := m.AddTask(srv.URL, saveDir, 4); err != nil {
+	task, err := m.AddTask(srv.URL, saveDir, 4)
+	if err != nil {
 		t.Fatal(err)
 	}
+	partPath := m.stagingPath(saveDir, task.ID)
 
 	waitFor(t, func() bool {
 		return m.GetTasks()[0].Status == StatusRunning
 	}, 5*time.Second)
 	// 等 .part 落盘后再暂停，确保测的是"下载中暂停"而不是"探测期取消"
 	waitFor(t, func() bool {
-		_, err := os.Stat(filepath.Join(saveDir, "test.bin.part"))
+		_, err := os.Stat(partPath)
 		return err == nil
 	}, 5*time.Second)
 	if err := m.PauseTask(m.GetTasks()[0].ID); err != nil {
@@ -229,9 +234,8 @@ func TestManagerPauseAndResume(t *testing.T) {
 		return m.GetTasks()[0].Status == StatusPaused
 	}, 5*time.Second)
 
-	part := filepath.Join(saveDir, "test.bin.part")
-	if _, err := os.Stat(part); err != nil {
-		t.Fatal("暂停后 .part 文件应保留")
+	if _, err := os.Stat(partPath); err != nil {
+		t.Fatal("暂停后暂存数据文件应保留")
 	}
 	statePath := m.store.StatePath(m.GetTasks()[0].ID)
 	if _, err := os.Stat(statePath); err != nil {
@@ -293,9 +297,12 @@ func TestManagerResumeFromSeededSidecar(t *testing.T) {
 
 	const id = "fixed-id"
 	chunks := CalculateChunks(10000, 4) // 4 段,每段 2500
-	// .part 已包含全部内容,sidecar 标记第 0、2 段完成、第 1 段收到 1000 字节——
+	// 暂存数据已包含全部内容,sidecar 标记第 0、2 段完成、第 1 段收到 1000 字节——
 	// 恢复后服务器只应收到:第 1 段的 bytes=3500-4999 与第 3 段的 bytes=7500-9999
-	if err := os.WriteFile(filepath.Join(saveDir, "test.bin.part"), content, 0o644); err != nil {
+	if err := os.MkdirAll(m.stagingDir(saveDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(m.stagingPath(saveDir, id), content, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	sc := &Sidecar{
@@ -358,8 +365,8 @@ func TestManagerResumeFromSeededSidecar(t *testing.T) {
 	if string(got) != string(content) {
 		t.Fatal("续传后内容不一致")
 	}
-	if _, err := os.Stat(filepath.Join(saveDir, "test.bin.part")); !os.IsNotExist(err) {
-		t.Fatal(".part 应被改名移除")
+	if _, err := os.Stat(m.stagingPath(saveDir, id)); !os.IsNotExist(err) {
+		t.Fatal("暂存数据应被改名移除")
 	}
 }
 
