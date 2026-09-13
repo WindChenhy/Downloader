@@ -7,6 +7,7 @@ import {api} from './api';
 import TaskList from './components/TaskList';
 import AddTaskDialog from './components/AddTaskDialog';
 import SettingsPage from './components/SettingsPage';
+import {GearIcon, PlusIcon} from './components/icons';
 
 function loadTheme(): ThemeMode {
   const v = localStorage.getItem('theme');
@@ -78,13 +79,18 @@ export default function App() {
             {theme === 'light' ? '☀' : theme === 'dark' ? '🌙' : '◐'}
           </button>
           <button
-            className={`btn ghost ${view === 'settings' ? 'active' : ''}`}
+            className={`btn icon ghost ${view === 'settings' ? 'active' : ''}`}
+            title="设置"
             onClick={() => setView(view === 'settings' ? 'list' : 'settings')}
           >
-            设置
+            <GearIcon size={16} />
           </button>
-          <button className="btn primary" onClick={() => { setPrefillUrl(''); setShowDialog(true); }}>
-            ＋ 新建下载
+          <button
+            className="btn icon primary"
+            title="新建下载"
+            onClick={() => { setPrefillUrl(''); setShowDialog(true); }}
+          >
+            <PlusIcon size={16} />
           </button>
         </div>
       </header>

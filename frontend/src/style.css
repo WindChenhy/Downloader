@@ -161,6 +161,26 @@ body {
   display: block;
 }
 
+.btn.icon.ghost {
+  border: 1px solid var(--border);
+}
+
+.btn.icon.ghost:hover,
+.btn.icon.ghost.active {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.btn.icon.primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.btn.icon.primary:hover {
+  background: var(--accent-hover);
+  color: #fff;
+}
+
 .btn.danger {
   color: var(--red);
 }
