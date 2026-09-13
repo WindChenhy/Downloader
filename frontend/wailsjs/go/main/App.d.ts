@@ -8,6 +8,8 @@ export function GetSettings():Promise<engine.Settings>;
 
 export function GetTasks():Promise<Array<engine.Task>>;
 
+export function OpenFolder(arg1:string,arg2:string):Promise<void>;
+
 export function PauseTask(arg1:string):Promise<void>;
 
 export function Quit():Promise<void>;

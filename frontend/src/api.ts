@@ -2,6 +2,7 @@ import {
   AddTask,
   GetSettings,
   GetTasks,
+  OpenFolder,
   PauseTask,
   RemoveTask,
   ResumeTask,
@@ -18,6 +19,7 @@ export const api = {
   pauseTask: (id: string): Promise<void> => PauseTask(id),
   resumeTask: (id: string): Promise<void> => ResumeTask(id),
   removeTask: (id: string): Promise<void> => RemoveTask(id),
+  openFolder: (saveDir: string, fileName: string): Promise<void> => OpenFolder(saveDir, fileName),
   getSettings: (): Promise<Settings> => GetSettings() as unknown as Promise<Settings>,
   saveSettings: (s: Settings): Promise<void> => SaveSettings(s),
 };

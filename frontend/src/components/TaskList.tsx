@@ -85,6 +85,14 @@ function TaskRow({task, onChanged}: {task: Task; onChanged: () => void}) {
     }
   };
 
+  const openFolder = async () => {
+    try {
+      await api.openFolder(task.saveDir, task.fileName);
+    } catch (e) {
+      showError(`打开目录失败：${e}`);
+    }
+  };
+
   return (
     <div className={`task-row status-${task.status}`}>
       <div className="task-main">
@@ -117,6 +125,9 @@ function TaskRow({task, onChanged}: {task: Task; onChanged: () => void}) {
         </div>
       </div>
       <div className="task-actions">
+        <button className="btn ghost small" onClick={openFolder}>
+          打开目录
+        </button>
         {(task.status === 'running' || task.status === 'paused' || task.status === 'failed') && (
           <button className="btn ghost small" onClick={toggle}>
             {running ? '暂停' : task.status === 'failed' ? '重试' : '继续'}

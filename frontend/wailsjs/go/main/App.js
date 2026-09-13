@@ -14,6 +14,10 @@ export function GetTasks() {
   return window['go']['main']['App']['GetTasks']();
 }
 
+export function OpenFolder(arg1, arg2) {
+  return window['go']['main']['App']['OpenFolder'](arg1, arg2);
+}
+
 export function PauseTask(arg1) {
   return window['go']['main']['App']['PauseTask'](arg1);
 }

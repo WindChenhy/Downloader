@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"downloader/engine"
@@ -82,6 +83,21 @@ func (a *App) SaveSettings(s engine.Settings) error { return a.mgr.SaveSettings(
 func (a *App) ShowWindow() {
 	runtime.WindowUnminimise(a.ctx)
 	runtime.WindowShow(a.ctx)
+}
+
+// OpenFolder 在资源管理器中打开任务所在目录；
+// 目标文件已存在时（如已完成）直接选中该文件。
+func (a *App) OpenFolder(saveDir string, fileName string) error {
+	dir, err := filepath.Abs(saveDir)
+	if err != nil {
+		return err
+	}
+	target := filepath.Join(dir, fileName)
+	if st, err := os.Stat(target); err == nil && !st.IsDir() {
+		// explorer 接受 "/select,带空格路径" 整体加引号的形式
+		return exec.Command("explorer", "/select,"+target).Start()
+	}
+	return exec.Command("explorer", dir).Start()
 }
 
 // Quit 退出整个程序（托盘菜单使用）。
