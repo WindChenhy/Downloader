@@ -3,6 +3,8 @@ import {useEffect, useMemo, useRef, useState} from 'react';
 import type {Status, Task} from '../types';
 import {formatBytes, formatETA, formatSpeed, percent, statusMeta} from '../lib/format';
 import {api} from '../api';
+import {FolderIcon, PauseIcon, PlayIcon, RetryIcon, TrashIcon} from './icons';
+import DeleteTaskDialog from './DeleteTaskDialog';
 
 interface Props {
   tasks: Task[];
@@ -19,9 +21,8 @@ const FILTERS: {key: 'all' | Status; label: string}[] = [
 ];
 
 // 平滑速度显示：引擎每 500ms 推一次原始速率，做轻量指数平滑避免数字跳动
-function useSmoothedSpeed(tasks: Task[]): Map<string, number> {
+function useSmoothedSpeed(tasks: Task[]): void {
   const prev = useRef(new Map<string, number>());
-  const out = new Map<string, number>();
   for (const t of tasks) {
     let s = t.speed;
     if (t.status !== 'running') {
@@ -31,12 +32,18 @@ function useSmoothedSpeed(tasks: Task[]): Map<string, number> {
       if (p !== undefined) s = Math.round(p * 0.4 + s * 0.6);
     }
     prev.current.set(t.id, s);
-    out.set(t.id, s);
   }
-  return out;
 }
 
-function TaskRow({task, onChanged}: {task: Task; onChanged: () => void}) {
+function TaskRow({
+  task,
+  onChanged,
+  onRequestDelete,
+}: {
+  task: Task;
+  onChanged: () => void;
+  onRequestDelete: (t: Task) => void;
+}) {
   const meta = statusMeta[task.status];
   const pct = percent(task);
   const running = task.status === 'running';
@@ -45,11 +52,9 @@ function TaskRow({task, onChanged}: {task: Task; onChanged: () => void}) {
     running && task.totalSize > 0 && task.speed > 0
       ? Math.round((task.totalSize - task.downloaded) / task.speed)
       : 0;
-  // Wails WebView 中 window.confirm/alert 不可靠，删除采用两段式确认，错误行内展示
-  const [confirming, setConfirming] = useState(false);
   const [localErr, setLocalErr] = useState('');
-  const confirmTimer = useRef<number | undefined>(undefined);
-  useEffect(() => () => window.clearTimeout(confirmTimer.current), []);
+  const errTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(errTimer.current), []);
 
   const showError = (msg: string) => {
     setLocalErr(msg);
@@ -66,22 +71,6 @@ function TaskRow({task, onChanged}: {task: Task; onChanged: () => void}) {
       onChanged();
     } catch (e) {
       showError(`操作失败：${e}`);
-    }
-  };
-
-  const remove = async () => {
-    if (!confirming) {
-      setConfirming(true);
-      confirmTimer.current = window.setTimeout(() => setConfirming(false), 2500);
-      return;
-    }
-    window.clearTimeout(confirmTimer.current);
-    setConfirming(false);
-    try {
-      await api.removeTask(task.id);
-      onChanged();
-    } catch (e) {
-      showError(`删除失败：${e}`);
     }
   };
 
@@ -125,19 +114,20 @@ function TaskRow({task, onChanged}: {task: Task; onChanged: () => void}) {
         </div>
       </div>
       <div className="task-actions">
-        <button className="btn ghost small" onClick={openFolder}>
-          打开目录
+        <button className="btn icon" title="打开所在目录" onClick={openFolder}>
+          <FolderIcon />
         </button>
         {(task.status === 'running' || task.status === 'paused' || task.status === 'failed') && (
-          <button className="btn ghost small" onClick={toggle}>
-            {running ? '暂停' : task.status === 'failed' ? '重试' : '继续'}
+          <button
+            className="btn icon"
+            title={running ? '暂停' : task.status === 'failed' ? '重试' : '继续'}
+            onClick={toggle}
+          >
+            {running ? <PauseIcon /> : task.status === 'failed' ? <RetryIcon /> : <PlayIcon />}
           </button>
         )}
-        <button
-          className={`btn small ${confirming ? 'confirm-delete' : 'ghost danger'}`}
-          onClick={remove}
-        >
-          {confirming ? '确认删除？' : '删除'}
+        <button className="btn icon danger" title="删除任务" onClick={() => onRequestDelete(task)}>
+          <TrashIcon />
         </button>
       </div>
     </div>
@@ -148,6 +138,7 @@ export default function TaskList({tasks, onChanged}: Props) {
   useSmoothedSpeed(tasks); // 保持平滑缓存更新
   const [filter, setFilter] = useState<'all' | Status>('all');
   const [query, setQuery] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<Task | null>(null);
 
   const counts = useMemo(() => {
     const c = new Map<string, number>();
@@ -202,7 +193,16 @@ export default function TaskList({tasks, onChanged}: Props) {
           <p>没有符合条件的项目</p>
         </div>
       ) : (
-        filtered.map((t) => <TaskRow key={t.id} task={t} onChanged={onChanged} />)
+        filtered.map((t) => (
+          <TaskRow key={t.id} task={t} onChanged={onChanged} onRequestDelete={setDeleteTarget} />
+        ))
+      )}
+      {deleteTarget && (
+        <DeleteTaskDialog
+          task={deleteTarget}
+          onClose={() => setDeleteTarget(null)}
+          onDeleted={onChanged}
+        />
       )}
     </div>
   );

@@ -73,7 +73,8 @@ func (m *Manager) APIHandler() http.Handler {
 	})
 
 	mux.HandleFunc("DELETE /api/v1/tasks/{id}", func(w http.ResponseWriter, r *http.Request) {
-		if err := m.RemoveTask(r.PathValue("id")); err != nil {
+		deleteFiles := r.URL.Query().Get("files") == "1" || r.URL.Query().Get("files") == "true"
+		if err := m.RemoveTask(r.PathValue("id"), deleteFiles); err != nil {
 			writeErr(w, http.StatusNotFound, err.Error())
 			return
 		}

@@ -14,7 +14,7 @@ export function PauseTask(arg1:string):Promise<void>;
 
 export function Quit():Promise<void>;
 
-export function RemoveTask(arg1:string):Promise<void>;
+export function RemoveTask(arg1:string,arg2:boolean):Promise<void>;
 
 export function ResumeTask(arg1:string):Promise<void>;
 

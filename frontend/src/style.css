@@ -139,6 +139,19 @@ body {
   font-size: 12px;
 }
 
+/* 图标按钮：仅显示 SVG 图标，悬浮有 title 提示 */
+.btn.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px;
+  line-height: 0;
+}
+
+.btn.icon svg {
+  display: block;
+}
+
 .btn.danger {
   color: var(--red);
 }
@@ -400,6 +413,28 @@ body {
   color: var(--red);
   font-size: 12px;
   margin-top: 4px;
+}
+
+.dialog-compact {
+  width: 420px;
+}
+
+.delete-target {
+  font-size: 13px;
+  margin-bottom: 8px;
+  word-break: break-all;
+}
+
+.delete-note {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+  word-break: break-all;
+}
+
+.dialog-actions.three {
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .settings-note {

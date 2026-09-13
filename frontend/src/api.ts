@@ -18,7 +18,7 @@ export const api = {
     AddTask(url, saveDir, connections) as unknown as Promise<Task>,
   pauseTask: (id: string): Promise<void> => PauseTask(id),
   resumeTask: (id: string): Promise<void> => ResumeTask(id),
-  removeTask: (id: string): Promise<void> => RemoveTask(id),
+  removeTask: (id: string, deleteFiles: boolean): Promise<void> => RemoveTask(id, deleteFiles),
   openFolder: (saveDir: string, fileName: string): Promise<void> => OpenFolder(saveDir, fileName),
   getSettings: (): Promise<Settings> => GetSettings() as unknown as Promise<Settings>,
   saveSettings: (s: Settings): Promise<void> => SaveSettings(s),

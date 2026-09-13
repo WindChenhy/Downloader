@@ -73,7 +73,10 @@ func (a *App) AddTask(url string, saveDir string, connections int) (engine.Task,
 
 func (a *App) PauseTask(id string) error  { return a.mgr.PauseTask(id) }
 func (a *App) ResumeTask(id string) error { return a.mgr.ResumeTask(id) }
-func (a *App) RemoveTask(id string) error { return a.mgr.RemoveTask(id) }
+// RemoveTask 删除任务记录；deleteFiles 为 true 时连同已下载文件一起删除。
+func (a *App) RemoveTask(id string, deleteFiles bool) error {
+	return a.mgr.RemoveTask(id, deleteFiles)
+}
 
 func (a *App) GetSettings() engine.Settings { return a.mgr.GetSettings() }
 

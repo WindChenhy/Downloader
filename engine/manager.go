@@ -149,7 +149,9 @@ func (m *Manager) ResumeTask(id string) error {
 	return nil
 }
 
-func (m *Manager) RemoveTask(id string) error {
+// RemoveTask 删除任务记录。deleteFiles 为 false 时仅删除记录与未完成的
+// .part 数据，已下载完成的正式文件保留在磁盘上；为 true 时连同正式文件一起删除。
+func (m *Manager) RemoveTask(id string, deleteFiles bool) error {
 	m.mu.Lock()
 	h, ok := m.handles[id]
 	if !ok {
@@ -179,8 +181,12 @@ func (m *Manager) RemoveTask(id string) error {
 	m.changedLocked()
 	m.mu.Unlock()
 
-	// 清理未完成残留；已完成的正式文件保留在原处
+	// 未完成的 .part 属于下载数据而非成果文件，随记录一起清理；
+	// 正式文件是否删除由 deleteFiles 决定
 	_ = os.Remove(filepath.Join(t.SaveDir, t.FileName+".part"))
+	if deleteFiles {
+		_ = os.Remove(filepath.Join(t.SaveDir, t.FileName))
+	}
 	_ = os.Remove(m.store.StatePath(id))
 	return nil
 }

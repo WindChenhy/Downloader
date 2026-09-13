@@ -26,8 +26,8 @@ export function Quit() {
   return window['go']['main']['App']['Quit']();
 }
 
-export function RemoveTask(arg1) {
-  return window['go']['main']['App']['RemoveTask'](arg1);
+export function RemoveTask(arg1, arg2) {
+  return window['go']['main']['App']['RemoveTask'](arg1, arg2);
 }
 
 export function ResumeTask(arg1) {
