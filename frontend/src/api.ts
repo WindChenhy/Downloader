@@ -22,7 +22,7 @@ export const api = {
   removeTask: (id: string, deleteFiles: boolean): Promise<void> => RemoveTask(id, deleteFiles),
   openFolder: (saveDir: string, fileName: string): Promise<void> => OpenFolder(saveDir, fileName),
   getSettings: (): Promise<Settings> => GetSettings() as unknown as Promise<Settings>,
-  saveSettings: (s: Settings): Promise<void> => SaveSettings(s),
+  saveSettings: (s: Settings): Promise<void> => SaveSettings(s as unknown as Parameters<typeof SaveSettings>[0]),
   applyCloseAction: (action: 'exit' | 'minimize', remember: boolean): Promise<void> =>
     ApplyCloseAction(action, remember),
 };

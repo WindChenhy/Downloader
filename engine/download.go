@@ -44,21 +44,21 @@ func (w *offsetWriter) Write(p []byte) (int, error) {
 // taskRunner 负责一个任务单次运行的完整下载逻辑：
 // 探测 → 续传校验 → 分段下载（含重试）→ 落盘 → 改名。
 type taskRunner struct {
-	m         *Manager
-	h         *taskHandle
-	task      Task // 本地副本，关键字段经 updateTask 写回
-	cancel    context.CancelFunc
-	settings  Settings          // 运行开始时的设置快照
-	fetchURL  string            // 实际请求 URL（可能经过镜像改写）
-	userAgent string            // 本轮使用的 UA
+	m            *Manager
+	h            *taskHandle
+	task         Task // 本地副本，关键字段经 updateTask 写回
+	cancel       context.CancelFunc
+	settings     Settings // 运行开始时的设置快照
+	fetchURL     string   // 实际请求 URL（可能经过镜像改写）
+	userAgent    string   // 本轮使用的 UA
 	extraHeaders map[string]string
-	sidecar   *Sidecar
-	scMu      sync.Mutex
-	dirty     bool
-	partPath  string
-	statePath string
-	partFile  *os.File
-	resuming  bool
+	sidecar      *Sidecar
+	scMu         sync.Mutex
+	dirty        bool
+	partPath     string
+	statePath    string
+	partFile     *os.File
+	resuming     bool
 }
 
 func (r *taskRunner) run(ctx context.Context) error {
@@ -183,7 +183,17 @@ func (r *taskRunner) run(ctx context.Context) error {
 		return err
 	}
 	r.flushSidecar()
-	return r.finishFile()
+	if err := r.finishFile(); err != nil {
+		return err
+	}
+	// 下载完成后按设置自动解压压缩包（失败不改变任务完成状态）
+	if r.settings.AutoExtract && r.task.FileName != "" {
+		final := filepath.Join(r.task.SaveDir, r.task.FileName)
+		if isArchivePath(final) {
+			_ = extractArchive(final)
+		}
+	}
+	return nil
 }
 
 // newSidecar 根据探测结果构造初始续传状态。
@@ -490,6 +500,10 @@ func (r *taskRunner) finishFile() error {
 	if err := os.Rename(r.partPath, final); err != nil {
 		return err
 	}
+	r.task.FileName = filepath.Base(final)
+	r.m.updateTask(r.h, func(t *Task) {
+		t.FileName = r.task.FileName
+	})
 	// 暂存目录已空则移除（其他任务共用时删除失败，忽略）
 	_ = os.Remove(filepath.Dir(r.partPath))
 	return nil

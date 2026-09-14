@@ -87,6 +87,11 @@ func (m *Manager) AddTask(rawURL, saveDir string, connections int, customName st
 	if strings.TrimSpace(saveDir) == "" {
 		saveDir = m.settings.SaveDir
 	}
+	// 目录分类若指向子目录则先确保存在（创建失败时仍尝试下载，由后续写入报错）
+	if abs, err := filepath.Abs(saveDir); err == nil {
+		_ = os.MkdirAll(abs, 0o755)
+		saveDir = abs
+	}
 	abs, err := filepath.Abs(saveDir)
 	if err != nil {
 		return Task{}, err
