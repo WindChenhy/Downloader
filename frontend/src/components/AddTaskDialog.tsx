@@ -22,6 +22,7 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
   const [customName, setCustomName] = useState('');
   const [saveDir, setSaveDir] = useState(settings.saveDir);
   const [connections, setConnections] = useState(settings.connections);
+  const [categoryIdx, setCategoryIdx] = useState(-1); // -1 = 默认/自定义目录
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const urlRef = useRef<HTMLTextAreaElement>(null);
@@ -91,12 +92,36 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
           />
         </label>
         <label className="field">
+          <span>目录分类</span>
+          <select
+            value={categoryIdx}
+            onChange={(e) => {
+              const idx = Number(e.target.value);
+              setCategoryIdx(idx);
+              if (idx >= 0) {
+                const c = settings.dirCategories?.[idx];
+                if (c?.path) setSaveDir(c.path);
+              }
+            }}
+          >
+            <option value={-1}>默认 / 自定义</option>
+            {(settings.dirCategories ?? []).map((c, i) => (
+              <option key={i} value={i}>
+                {c.name || '未命名'}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
           <span>保存到</span>
           <input
             type="text"
             value={saveDir}
             placeholder="下载目录"
-            onChange={(e) => setSaveDir(e.target.value)}
+            onChange={(e) => {
+              setSaveDir(e.target.value);
+              setCategoryIdx(-1);
+            }}
           />
         </label>
         <label className="field">

@@ -80,22 +80,30 @@ const (
 	CloseActionMinimize = "minimize" // 最小化到系统托盘
 )
 
+// DirCategory 下载目录分类：按类型把文件落到不同子目录。
+type DirCategory struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
 // Settings 全局设置。
 type Settings struct {
-	SaveDir         string `json:"saveDir"`
-	Connections     int    `json:"connections"`
-	ConcurrentTasks int    `json:"concurrentTasks"`
-	SpeedLimit      int64  `json:"speedLimit"`     // 全局下载限速，字节/秒，0 不限
-	UserAgent       string `json:"userAgent"`      // 空 = 内置默认 UA
-	ExtraHeaders    string `json:"extraHeaders"`   // 自定义请求头，每行一条 "Key: Value"
-	ProxyMode       string `json:"proxyMode"`      // none | system | custom
-	ProxyURL        string `json:"proxyUrl"`       // custom 模式生效，如 http://127.0.0.1:7890
-	GitHubMirror    bool   `json:"githubMirror"`   // GitHub 链接自动走镜像加速
-	MirrorTemplate  string `json:"mirrorTemplate"` // 镜像模板，{url} 为原始链接
-	ClipboardWatch  bool   `json:"clipboardWatch"` // 剪贴板监听
-	APIEnabled      bool   `json:"apiEnabled"`     // 本地 REST API
-	APIPort         int    `json:"apiPort"`
-	CloseAction     string `json:"closeAction"` // ask | exit | minimize
+	SaveDir         string        `json:"saveDir"`
+	Connections     int           `json:"connections"`
+	ConcurrentTasks int           `json:"concurrentTasks"`
+	SpeedLimit      int64         `json:"speedLimit"`     // 全局下载限速，字节/秒，0 不限
+	UserAgent       string        `json:"userAgent"`      // 空 = 内置默认 UA
+	ExtraHeaders    string        `json:"extraHeaders"`   // 自定义请求头，每行一条 "Key: Value"
+	ProxyMode       string        `json:"proxyMode"`      // none | system | custom
+	ProxyURL        string        `json:"proxyUrl"`       // custom 模式生效，如 http://127.0.0.1:7890
+	GitHubMirror    bool          `json:"githubMirror"`   // GitHub 链接自动走镜像加速
+	MirrorTemplate  string        `json:"mirrorTemplate"` // 镜像模板，{url} 为原始链接
+	ClipboardWatch  bool          `json:"clipboardWatch"` // 剪贴板监听
+	APIEnabled      bool          `json:"apiEnabled"`     // 本地 REST API
+	APIPort         int           `json:"apiPort"`
+	CloseAction     string        `json:"closeAction"`   // ask | exit | minimize
+	DirCategories   []DirCategory `json:"dirCategories"` // 下载目录分类
+	AutoExtract     bool          `json:"autoExtract"`   // 下载完成后自动解压压缩包
 }
 
 func defaultSaveDir() string {
@@ -104,6 +112,17 @@ func defaultSaveDir() string {
 		return "."
 	}
 	return filepath.Join(home, "Downloads")
+}
+
+// defaultDirCategories 首次运行预置的目录分类（与常见下载场景对齐）。
+func defaultDirCategories() []DirCategory {
+	base := filepath.Join(defaultSaveDir())
+	return []DirCategory{
+		{Name: "音乐", Path: filepath.Join(base, "Music")},
+		{Name: "视频", Path: filepath.Join(base, "Video")},
+		{Name: "文档", Path: filepath.Join(base, "Document")},
+		{Name: "程序", Path: filepath.Join(base, "Program")},
+	}
 }
 
 // defaultSettings 首次运行（无设置文件）时的默认值。
@@ -118,6 +137,8 @@ func defaultSettings() Settings {
 		APIEnabled:      true,
 		APIPort:         DefaultAPIPort,
 		CloseAction:     CloseActionAsk,
+		DirCategories:   defaultDirCategories(),
+		AutoExtract:     false,
 	}
 }
 
@@ -164,6 +185,27 @@ func (s *Settings) normalize() {
 	default:
 		s.CloseAction = CloseActionAsk
 	}
+	// 目录分类：去掉空白项，名称去重（同名后者覆盖路径）
+	if s.DirCategories == nil {
+		s.DirCategories = nil
+	} else {
+		seen := make(map[string]int)
+		out := make([]DirCategory, 0, len(s.DirCategories))
+		for _, c := range s.DirCategories {
+			name := strings.TrimSpace(c.Name)
+			path := strings.TrimSpace(c.Path)
+			if name == "" || path == "" {
+				continue
+			}
+			if i, ok := seen[name]; ok {
+				out[i] = DirCategory{Name: name, Path: path}
+				continue
+			}
+			seen[name] = len(out)
+			out = append(out, DirCategory{Name: name, Path: path})
+		}
+		s.DirCategories = out
+	}
 }
 
 func (s *Store) LoadSettings() (Settings, error) {
@@ -189,6 +231,9 @@ func (s *Store) LoadSettings() (Settings, error) {
 		}
 		if _, ok := keys["apiEnabled"]; !ok {
 			st.APIEnabled = true
+		}
+		if _, ok := keys["dirCategories"]; !ok {
+			st.DirCategories = defaultDirCategories()
 		}
 	}
 	st.normalize()

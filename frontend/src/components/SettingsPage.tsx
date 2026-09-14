@@ -1,9 +1,9 @@
-import {useState, type ReactNode} from 'react';
+import {useEffect, useState, type ReactNode} from 'react';
 
-import type {Settings, ThemeMode} from '../types';
+import type {DirCategory, Settings, ThemeMode} from '../types';
 import {ACCENTS} from '../types';
 import {api} from '../api';
-import {MonitorIcon, MoonIcon, SunIcon} from './icons';
+import {MonitorIcon, MoonIcon, PencilIcon, PlusIcon, SunIcon, TrashIcon} from './icons';
 
 interface Props {
   settings: Settings;
@@ -58,10 +58,43 @@ export default function SettingsPage({
   const [form, setForm] = useState<Settings>({
     ...settings,
     closeAction: settings.closeAction ?? 'ask',
+    dirCategories: settings.dirCategories ?? [],
+    autoExtract: settings.autoExtract ?? false,
   });
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState('');
+  // 应用内重命名弹窗（替代原生 prompt）
+  const [renameTarget, setRenameTarget] = useState<{index: number; name: string} | null>(null);
+  const [renameValue, setRenameValue] = useState('');
   const set = (patch: Partial<Settings>) => setForm((f) => ({...f, ...patch}));
+
+  const updateCategory = (i: number, patch: Partial<DirCategory>) => {
+    setForm((f) => {
+      const list = f.dirCategories.map((c, idx) => (idx === i ? {...c, ...patch} : c));
+      return {...f, dirCategories: list};
+    });
+  };
+  const removeCategory = (i: number) => {
+    setForm((f) => ({...f, dirCategories: f.dirCategories.filter((_, idx) => idx !== i)}));
+  };
+  const addCategory = () => {
+    setForm((f) => ({
+      ...f,
+      dirCategories: [...(f.dirCategories ?? []), {name: '', path: f.saveDir}],
+    }));
+  };
+  const openRename = (i: number) => {
+    const c = form.dirCategories?.[i];
+    if (!c) return;
+    setRenameTarget({index: i, name: c.name});
+    setRenameValue(c.name);
+  };
+  const confirmRename = () => {
+    if (renameTarget == null) return;
+    const name = renameValue.trim();
+    if (name) updateCategory(renameTarget.index, {name});
+    setRenameTarget(null);
+  };
 
   const save = async () => {
     try {
@@ -77,7 +110,19 @@ export default function SettingsPage({
 
   const speedLimitKb = form.speedLimit > 0 ? Math.round(form.speedLimit / 1024) : 0;
 
+  useEffect(() => {
+    if (renameTarget == null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setRenameTarget(null);
+      if (e.key === 'Enter') confirmRename();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renameTarget, renameValue]);
+
   return (
+    <>
     <div className="settings">
       <h2>设置</h2>
 
@@ -121,6 +166,53 @@ export default function SettingsPage({
           onChange={(e) => set({saveDir: e.target.value})}
         />
       </label>
+      <div className="field">
+        <span>下载目录分类</span>
+        <div className="dir-cats">
+          {(form.dirCategories ?? []).map((c, i) => (
+            <div className="dir-cat-row" key={i}>
+              <div className="dir-cat-info">
+                <input
+                  type="text"
+                  className="dir-cat-name"
+                  value={c.name}
+                  placeholder="分类名称，如：音乐"
+                  onChange={(e) => updateCategory(i, {name: e.target.value})}
+                />
+                <input
+                  type="text"
+                  className="dir-cat-path"
+                  value={c.path}
+                  placeholder="保存路径"
+                  onChange={(e) => updateCategory(i, {path: e.target.value})}
+                />
+              </div>
+              <div className="dir-cat-actions">
+                <button
+                  type="button"
+                  className="btn icon ghost"
+                  title="重命名分类"
+                  onClick={() => openRename(i)}
+                >
+                  <PencilIcon size={14} />
+                </button>
+                <button
+                  type="button"
+                  className="btn icon ghost danger"
+                  title="删除分类"
+                  onClick={() => removeCategory(i)}
+                >
+                  <TrashIcon size={14} />
+                </button>
+              </div>
+            </div>
+          ))}
+          <button type="button" className="btn ghost small cat-add" onClick={addCategory}>
+            <PlusIcon size={14} />
+            添加
+          </button>
+        </div>
+      </div>
       <div className="field-grid">
         <label className="field">
           <span>每任务连接数（1–128）</span>
@@ -212,6 +304,17 @@ export default function SettingsPage({
         </label>
       )}
 
+      <h3>压缩包</h3>
+      <div className="archive-panel">
+        <Switch
+          checked={form.autoExtract}
+          onChange={(v) => set({autoExtract: v})}
+          label="自动解压压缩包"
+          hint="下载完成后解压到同目录下与压缩包同名的文件夹（zip / tar / tar.gz 等）"
+        />
+        <div className="archive-state">{form.autoExtract ? '开启' : '关闭'}</div>
+      </div>
+
       <h3>窗口</h3>
       <div className="field">
         <span>点击关闭按钮时</span>
@@ -271,5 +374,37 @@ export default function SettingsPage({
         </button>
       </div>
     </div>
+
+    {renameTarget != null && (
+      <div
+        className="overlay"
+        onMouseDown={(e) => e.target === e.currentTarget && setRenameTarget(null)}
+      >
+        <div className="dialog dialog-compact">
+          <h2>重命名分类</h2>
+          <label className="field">
+            <span>分类名称</span>
+            <input
+              autoFocus
+              type="text"
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') confirmRename();
+              }}
+            />
+          </label>
+          <div className="dialog-actions">
+            <button className="btn ghost" onClick={() => setRenameTarget(null)}>
+              取消
+            </button>
+            <button className="btn primary" onClick={confirmRename}>
+              确定
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }

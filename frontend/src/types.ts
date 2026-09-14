@@ -17,6 +17,11 @@ export interface Task {
 export type ProxyMode = 'none' | 'system' | 'custom';
 export type CloseAction = 'ask' | 'exit' | 'minimize';
 
+export interface DirCategory {
+  name: string;
+  path: string;
+}
+
 export interface Settings {
   saveDir: string;
   connections: number;
@@ -32,6 +37,8 @@ export interface Settings {
   apiEnabled: boolean;
   apiPort: number;
   closeAction: CloseAction;
+  dirCategories: DirCategory[];
+  autoExtract: boolean;
 }
 
 export type ThemeMode = 'light' | 'dark' | 'system';
