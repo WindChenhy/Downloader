@@ -14,6 +14,7 @@ export namespace engine {
 	    clipboardWatch: boolean;
 	    apiEnabled: boolean;
 	    apiPort: number;
+	    closeAction: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -34,6 +35,7 @@ export namespace engine {
 	        this.clipboardWatch = source["clipboardWatch"];
 	        this.apiEnabled = source["apiEnabled"];
 	        this.apiPort = source["apiPort"];
+	        this.closeAction = source["closeAction"];
 	    }
 	}
 	export class Task {

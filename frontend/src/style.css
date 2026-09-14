@@ -92,8 +92,40 @@ body {
 
 .titlebar-actions {
   display: flex;
-  gap: 10px;
+  align-items: center;
+  gap: 8px;
   --wails-draggable: no-drag;
+}
+
+/* 顶栏图标按钮：统一尺寸与视觉重量 */
+.titlebar-actions .btn.icon {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 8px;
+}
+
+.titlebar-actions .btn.icon.ghost {
+  border: none;
+  color: var(--text-dim);
+  background: transparent;
+}
+
+.titlebar-actions .btn.icon.ghost:hover,
+.titlebar-actions .btn.icon.ghost.active {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.titlebar-actions .btn.icon.primary {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.titlebar-actions .btn.icon.primary:hover {
+  box-shadow: 0 2px 6px rgba(79, 140, 255, 0.35);
 }
 
 /* ---------- 按钮 ---------- */
@@ -473,10 +505,18 @@ body {
   color: var(--text);
   font-family: inherit;
   font-size: 13px;
+  line-height: 1.5;
   padding: 8px 10px;
   outline: none;
-  resize: vertical;
   user-select: text;
+}
+
+/* 链接输入：最小高度与普通 input 对齐，禁止拖拽，按内容自动增高 */
+.field textarea {
+  resize: none;
+  min-height: 38px;
+  max-height: 140px;
+  overflow-y: auto;
 }
 
 .field input:focus,
@@ -783,16 +823,43 @@ select,
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
+  background: var(--bg);
 }
 
 .segmented button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   border: none;
   background: transparent;
-  color: var(--text-dim);
+  color: var(--text);
   font-family: inherit;
   font-size: 12px;
-  padding: 6px 14px;
+  line-height: 1.3;
+  padding: 7px 14px;
   cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+/* 覆盖 .field span，避免按钮内文字被标成 dim/块级 */
+.segmented button span {
+  display: inline;
+  color: inherit;
+  font-size: inherit;
+  margin-bottom: 0;
+}
+
+.segmented button svg {
+  display: block;
+  flex-shrink: 0;
+}
+
+.segmented button:hover:not(.active) {
+  background: var(--bg-hover);
+  color: var(--text);
 }
 
 .segmented button + button {
@@ -825,4 +892,28 @@ select,
 .swatch.active {
   border-color: var(--text);
   box-shadow: 0 0 0 2px var(--bg-raised) inset;
+}
+
+/* 关闭确认弹窗 */
+.close-dialog-text {
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0 4px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.checkbox-row input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+  cursor: pointer;
 }

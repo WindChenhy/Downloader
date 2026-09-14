@@ -64,7 +64,7 @@ func readJSON(path string, v any) error {
 
 const (
 	DefaultConnections     = 8
-	MaxConnections         = 32
+	MaxConnections         = 128
 	DefaultConcurrentTasks = 3
 	MaxConcurrentTasks     = 10
 
@@ -74,6 +74,10 @@ const (
 
 	DefaultMirrorTemplate = "https://gh-proxy.com/{url}"
 	DefaultAPIPort        = 8199
+
+	CloseActionAsk      = "ask"      // 每次询问
+	CloseActionExit     = "exit"     // 直接退出
+	CloseActionMinimize = "minimize" // 最小化到系统托盘
 )
 
 // Settings 全局设置。
@@ -91,6 +95,7 @@ type Settings struct {
 	ClipboardWatch  bool   `json:"clipboardWatch"` // 剪贴板监听
 	APIEnabled      bool   `json:"apiEnabled"`     // 本地 REST API
 	APIPort         int    `json:"apiPort"`
+	CloseAction     string `json:"closeAction"` // ask | exit | minimize
 }
 
 func defaultSaveDir() string {
@@ -112,6 +117,7 @@ func defaultSettings() Settings {
 		ClipboardWatch:  true,
 		APIEnabled:      true,
 		APIPort:         DefaultAPIPort,
+		CloseAction:     CloseActionAsk,
 	}
 }
 
@@ -151,6 +157,12 @@ func (s *Settings) normalize() {
 	}
 	if s.APIEnabled && s.APIPort == 0 {
 		s.APIPort = DefaultAPIPort
+	}
+	// 关闭行为：非法值回落为询问；默认绝不是最小化
+	switch s.CloseAction {
+	case CloseActionExit, CloseActionMinimize:
+	default:
+		s.CloseAction = CloseActionAsk
 	}
 }
 

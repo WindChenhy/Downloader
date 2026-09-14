@@ -15,6 +15,7 @@ export interface Task {
 }
 
 export type ProxyMode = 'none' | 'system' | 'custom';
+export type CloseAction = 'ask' | 'exit' | 'minimize';
 
 export interface Settings {
   saveDir: string;
@@ -30,6 +31,7 @@ export interface Settings {
   clipboardWatch: boolean;
   apiEnabled: boolean;
   apiPort: number;
+  closeAction: CloseAction;
 }
 
 export type ThemeMode = 'light' | 'dark' | 'system';

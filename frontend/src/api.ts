@@ -1,5 +1,6 @@
 import {
   AddTask,
+  ApplyCloseAction,
   GetSettings,
   GetTasks,
   OpenFolder,
@@ -22,4 +23,6 @@ export const api = {
   openFolder: (saveDir: string, fileName: string): Promise<void> => OpenFolder(saveDir, fileName),
   getSettings: (): Promise<Settings> => GetSettings() as unknown as Promise<Settings>,
   saveSettings: (s: Settings): Promise<void> => SaveSettings(s),
+  applyCloseAction: (action: 'exit' | 'minimize', remember: boolean): Promise<void> =>
+    ApplyCloseAction(action, remember),
 };

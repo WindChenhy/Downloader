@@ -1,4 +1,4 @@
-import {useEffect, useState} from 'react';
+import {useCallback, useEffect, useRef, useState, type ChangeEvent} from 'react';
 
 import type {Settings} from '../types';
 import {api} from '../api';
@@ -10,6 +10,13 @@ interface Props {
   onAdded: () => void;
 }
 
+/** 按内容高度自适应：先重置再量 scrollHeight，避免越撑越高。 */
+function autoGrow(el: HTMLTextAreaElement | null) {
+  if (!el) return;
+  el.style.height = 'auto';
+  el.style.height = `${el.scrollHeight}px`;
+}
+
 export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: Props) {
   const [url, setUrl] = useState(initialUrl ?? '');
   const [customName, setCustomName] = useState('');
@@ -17,11 +24,21 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
   const [connections, setConnections] = useState(settings.connections);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const urlRef = useRef<HTMLTextAreaElement>(null);
 
   // 剪贴板监听推来新链接时更新预填内容
   useEffect(() => {
     if (initialUrl) setUrl(initialUrl);
   }, [initialUrl]);
+
+  useEffect(() => {
+    autoGrow(urlRef.current);
+  }, [url]);
+
+  const onUrlChange = useCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
+    setUrl(e.target.value);
+    autoGrow(e.target);
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -55,11 +72,13 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
         <label className="field">
           <span>下载链接</span>
           <textarea
+            ref={urlRef}
             autoFocus
-            rows={3}
+            rows={1}
+            className="field-textarea"
             placeholder="粘贴 http/https 链接"
             value={url}
-            onChange={(e) => setUrl(e.target.value)}
+            onChange={onUrlChange}
           />
         </label>
         <label className="field">
@@ -81,11 +100,11 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
           />
         </label>
         <label className="field">
-          <span>连接数（1–32，多连接可提速）</span>
+          <span>连接数（1–128，多连接可提速）</span>
           <input
             type="number"
             min={1}
-            max={32}
+            max={128}
             value={connections}
             onChange={(e) => setConnections(Number(e.target.value))}
           />

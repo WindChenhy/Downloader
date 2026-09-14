@@ -1,8 +1,9 @@
-import {useState} from 'react';
+import {useState, type ReactNode} from 'react';
 
 import type {Settings, ThemeMode} from '../types';
 import {ACCENTS} from '../types';
 import {api} from '../api';
+import {MonitorIcon, MoonIcon, SunIcon} from './icons';
 
 interface Props {
   settings: Settings;
@@ -39,10 +40,10 @@ function Switch({
   );
 }
 
-const THEME_OPTIONS: {key: ThemeMode; label: string}[] = [
-  {key: 'light', label: '☀ 亮色'},
-  {key: 'dark', label: '🌙 暗色'},
-  {key: 'system', label: '◐ 跟随系统'},
+const THEME_OPTIONS: {key: ThemeMode; label: string; icon: ReactNode}[] = [
+  {key: 'light', label: '亮色', icon: <SunIcon size={14} />},
+  {key: 'dark', label: '暗色', icon: <MoonIcon size={14} />},
+  {key: 'system', label: '跟随系统', icon: <MonitorIcon size={14} />},
 ];
 
 export default function SettingsPage({
@@ -54,7 +55,10 @@ export default function SettingsPage({
   onSaved,
   onBack,
 }: Props) {
-  const [form, setForm] = useState<Settings>({...settings});
+  const [form, setForm] = useState<Settings>({
+    ...settings,
+    closeAction: settings.closeAction ?? 'ask',
+  });
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState('');
   const set = (patch: Partial<Settings>) => setForm((f) => ({...f, ...patch}));
@@ -87,7 +91,8 @@ export default function SettingsPage({
               className={theme === o.key ? 'active' : ''}
               onClick={() => onTheme(o.key)}
             >
-              {o.label}
+              {o.icon}
+              <span>{o.label}</span>
             </button>
           ))}
         </div>
@@ -118,11 +123,11 @@ export default function SettingsPage({
       </label>
       <div className="field-grid">
         <label className="field">
-          <span>每任务连接数（1–32）</span>
+          <span>每任务连接数（1–128）</span>
           <input
             type="number"
             min={1}
-            max={32}
+            max={128}
             value={form.connections}
             onChange={(e) => set({connections: Number(e.target.value)})}
           />
@@ -207,6 +212,29 @@ export default function SettingsPage({
         </label>
       )}
 
+      <h3>窗口</h3>
+      <div className="field">
+        <span>点击关闭按钮时</span>
+        <div className="segmented">
+          {(
+            [
+              {key: 'ask', label: '每次询问'},
+              {key: 'exit', label: '直接退出'},
+              {key: 'minimize', label: '最小化到托盘'},
+            ] as const
+          ).map((o) => (
+            <button
+              key={o.key}
+              type="button"
+              className={(form.closeAction ?? 'ask') === o.key ? 'active' : ''}
+              onClick={() => set({closeAction: o.key})}
+            >
+              <span>{o.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
       <h3>集成</h3>
       <Switch
         checked={form.clipboardWatch}
@@ -233,9 +261,6 @@ export default function SettingsPage({
         </label>
       )}
 
-      <div className="settings-note">
-        关闭窗口会最小化到系统托盘，任务进度自动保存，重启后可继续未完成的下载。
-      </div>
       {error && <div className="dialog-error">{error}</div>}
       <div className="dialog-actions">
         <button className="btn ghost" onClick={onBack}>

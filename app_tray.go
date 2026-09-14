@@ -3,12 +3,21 @@ package main
 import (
 	_ "embed"
 	"runtime"
+	"sync"
 
 	"fyne.io/systray"
 )
 
 //go:embed build/windows/icon.ico
 var trayIcon []byte
+
+var trayQuitOnce sync.Once
+
+// quitTray 关闭托盘图标并结束 systray.Run 消息循环。
+// 必须在进程退出前调用，否则 Windows 上会出现图标残留/进程不退。
+func quitTray() {
+	trayQuitOnce.Do(systray.Quit)
+}
 
 // initTray 在系统托盘创建图标。Wails v2 本身不提供托盘 API，
 // 使用 fyne.io/systray。

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync/atomic"
 
 	"downloader/engine"
 
@@ -17,6 +18,10 @@ import (
 type App struct {
 	ctx context.Context
 	mgr *engine.Manager
+	// quitting 主动退出标志：为 true 时 OnBeforeClose 不再拦截，
+	// 否则托盘/弹窗选「退出」后 close 生命周期会再次进入询问逻辑，
+	// 把窗口关掉却拦下进程退出，任务管理器里留下幽灵进程。
+	quitting atomic.Bool
 }
 
 func NewApp() *App { return &App{} }
@@ -43,6 +48,7 @@ func (a *App) startup(ctx context.Context) {
 			Title:   "初始化失败",
 			Message: "无法初始化下载数据目录：" + err.Error(),
 		})
+		a.quitting.Store(true)
 		runtime.Quit(ctx)
 		return
 	}
@@ -120,5 +126,71 @@ func (a *App) onSecondInstanceLaunch(data options.SecondInstanceData) {
 	}
 }
 
+// onBeforeClose 点击窗口关闭按钮时的统一入口。
+// 按设置决定：每次询问（默认）、直接退出、最小化到系统托盘。
+func (a *App) onBeforeClose(ctx context.Context) (prevent bool) {
+	// 已在主动退出流程中（托盘退出 / 弹窗选直接退出），放行
+	if a.quitting.Load() {
+		return false
+	}
+	if a.mgr == nil {
+		return false
+	}
+	switch a.mgr.GetSettings().CloseAction {
+	case engine.CloseActionMinimize:
+		runtime.WindowHide(ctx)
+		return true
+	case engine.CloseActionExit:
+		return false
+	default:
+		// ask：交给前端弹窗，先阻止关闭
+		runtime.EventsEmit(ctx, "app:confirm-close")
+		return true
+	}
+}
+
+// ApplyCloseAction 前端确认弹窗的回调。
+// action: exit | minimize；remember 为 true 时写入设置，之后不再询问。
+func (a *App) ApplyCloseAction(action string, remember bool) error {
+	if a.mgr == nil {
+		return fmt.Errorf("应用尚未初始化")
+	}
+	if action != engine.CloseActionExit && action != engine.CloseActionMinimize {
+		return fmt.Errorf("无效的关闭操作: %s", action)
+	}
+	if remember {
+		st := a.mgr.GetSettings()
+		st.CloseAction = action
+		if err := a.mgr.SaveSettings(st); err != nil {
+			return err
+		}
+	}
+	if action == engine.CloseActionMinimize {
+		runtime.WindowHide(a.ctx)
+		return nil
+	}
+	a.requestQuit()
+	return nil
+}
+
 // Quit 退出整个程序（托盘菜单使用）。
-func (a *App) Quit() { runtime.Quit(a.ctx) }
+func (a *App) Quit() {
+	a.requestQuit()
+}
+
+// requestQuit 统一退出入口：置标志、摘托盘、通知 Wails 退出。
+func (a *App) requestQuit() {
+	if !a.quitting.CompareAndSwap(false, true) {
+		return
+	}
+	quitTray()
+	if a.ctx != nil {
+		runtime.Quit(a.ctx)
+	}
+}
+
+// shutdown Wails 关闭回调：覆盖窗口关闭选「直接退出」等不经 requestQuit 的路径。
+func (a *App) shutdown(ctx context.Context) {
+	a.quitting.Store(true)
+	quitTray()
+}

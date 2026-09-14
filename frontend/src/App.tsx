@@ -7,7 +7,8 @@ import {api} from './api';
 import TaskList from './components/TaskList';
 import AddTaskDialog from './components/AddTaskDialog';
 import SettingsPage from './components/SettingsPage';
-import {GearIcon, PlusIcon} from './components/icons';
+import CloseConfirmDialog from './components/CloseConfirmDialog';
+import {GearIcon, MonitorIcon, MoonIcon, PlusIcon, SunIcon} from './components/icons';
 
 function loadTheme(): ThemeMode {
   const v = localStorage.getItem('theme');
@@ -19,6 +20,7 @@ export default function App() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [view, setView] = useState<'list' | 'settings'>('list');
   const [showDialog, setShowDialog] = useState(false);
+  const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const [prefillUrl, setPrefillUrl] = useState('');
   const [theme, setTheme] = useState<ThemeMode>(loadTheme);
   const [accent, setAccent] = useState(() => localStorage.getItem('accent') ?? 'blue');
@@ -59,6 +61,10 @@ export default function App() {
         setShowDialog(true);
       }
     });
+    // 后端点击关闭且设置为「每次询问」时弹出确认框
+    EventsOn('app:confirm-close', () => {
+      setShowCloseConfirm(true);
+    });
   }, [refresh]);
 
   const cycleTheme = () =>
@@ -75,8 +81,12 @@ export default function App() {
           </div>
         </div>
         <div className="titlebar-actions">
-          <button className="btn ghost" title="切换主题" onClick={cycleTheme}>
-            {theme === 'light' ? '☀' : theme === 'dark' ? '🌙' : '◐'}
+          <button
+            className="btn icon ghost theme-btn"
+            title={theme === 'light' ? '浅色' : theme === 'dark' ? '深色' : '跟随系统'}
+            onClick={cycleTheme}
+          >
+            {theme === 'light' ? <SunIcon size={16} /> : theme === 'dark' ? <MoonIcon size={16} /> : <MonitorIcon size={16} />}
           </button>
           <button
             className={`btn icon ghost ${view === 'settings' ? 'active' : ''}`}
@@ -117,6 +127,16 @@ export default function App() {
           initialUrl={prefillUrl}
           onClose={() => { setShowDialog(false); setPrefillUrl(''); }}
           onAdded={refresh}
+        />
+      )}
+
+      {showCloseConfirm && (
+        <CloseConfirmDialog
+          onClose={() => {
+            setShowCloseConfirm(false);
+            // 若用户勾选了记住选择，刷新本地设置缓存
+            api.getSettings().then(setSettings).catch(() => {});
+          }}
         />
       )}
     </div>
