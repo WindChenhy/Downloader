@@ -43,8 +43,14 @@ func (l *rateLimiter) Wait(n int64) {
 		}
 		now := time.Now()
 		l.credit += now.Sub(l.last).Seconds() * float64(l.limit)
-		if l.credit > float64(l.limit) {
-			l.credit = float64(l.limit)
+		// 突发上限默认 1 秒配额；当 n 本身超过 limit（低速限 + 大读块）时
+		// 必须允许累积到 n，否则 credit 永远够不着 n 而空转。
+		maxCredit := float64(l.limit)
+		if maxCredit < float64(n) {
+			maxCredit = float64(n)
+		}
+		if l.credit > maxCredit {
+			l.credit = maxCredit
 		}
 		l.last = now
 		if l.credit >= float64(n) {
@@ -62,10 +68,12 @@ func (l *rateLimiter) Wait(n int64) {
 }
 
 // limitedReader 逐块消耗配额后放行读取；配合 io.Copy 使用。
+// 额外限速器 extra 不为 nil 时再叠加一层每任务限速（取更严的一档）。
 type limitedReader struct {
-	r   io.Reader
-	ctx context.Context
-	l   *rateLimiter
+	r     io.Reader
+	ctx   context.Context
+	l     *rateLimiter
+	extra *rateLimiter
 }
 
 func (lr *limitedReader) Read(p []byte) (int, error) {
@@ -77,5 +85,8 @@ func (lr *limitedReader) Read(p []byte) (int, error) {
 		n = readChunkSize
 	}
 	lr.l.Wait(int64(n))
+	if lr.extra != nil {
+		lr.extra.Wait(int64(n))
+	}
 	return lr.r.Read(p)
 }

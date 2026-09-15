@@ -8,9 +8,15 @@ export function AddTasks(arg1:Array<engine.AddTaskParams>):Promise<engine.BatchA
 
 export function ApplyCloseAction(arg1:string,arg2:boolean):Promise<void>;
 
+export function ExportTasksJSON():Promise<string>;
+
 export function GetSettings():Promise<engine.Settings>;
 
 export function GetTasks():Promise<Array<engine.Task>>;
+
+export function ImportTasksJSON(arg1:string):Promise<engine.BatchAddResult>;
+
+export function MoveTask(arg1:string,arg2:number):Promise<void>;
 
 export function OpenFolder(arg1:string,arg2:string):Promise<void>;
 
@@ -23,5 +29,11 @@ export function RemoveTask(arg1:string,arg2:boolean):Promise<void>;
 export function ResumeTask(arg1:string):Promise<void>;
 
 export function SaveSettings(arg1:engine.Settings):Promise<void>;
+
+export function SetTaskPriority(arg1:string,arg2:number):Promise<void>;
+
+export function SetTaskSpeedLimit(arg1:string,arg2:number):Promise<void>;
+
+export function SetTaskStartAt(arg1:string,arg2:string):Promise<void>;
 
 export function ShowWindow():Promise<void>;

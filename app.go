@@ -52,6 +52,8 @@ func (a *App) startup(ctx context.Context) {
 			a.notifyTaskPaused(t)
 		case "task:finished":
 			a.notifyTaskFinished(t)
+		case "queue:idle":
+			a.onQueueIdle()
 		}
 	})
 	if err != nil {
@@ -98,6 +100,62 @@ func (a *App) AddTasks(items []engine.AddTaskParams) engine.BatchAddResult {
 
 func (a *App) PauseTask(id string) error  { return a.mgr.PauseTask(id) }
 func (a *App) ResumeTask(id string) error { return a.mgr.ResumeTask(id) }
+
+func (a *App) SetTaskPriority(id string, priority int) error {
+	return a.mgr.SetTaskPriority(id, priority)
+}
+func (a *App) MoveTask(id string, delta int) error { return a.mgr.MoveTask(id, delta) }
+func (a *App) SetTaskSpeedLimit(id string, limit int64) error {
+	return a.mgr.SetTaskSpeedLimit(id, limit)
+}
+func (a *App) SetTaskStartAt(id string, startAt string) error {
+	return a.mgr.SetTaskStartAt(id, startAt)
+}
+
+// ExportTasksJSON 导出任务列表 JSON 字符串（前端触发下载）。
+func (a *App) ExportTasksJSON() (string, error) {
+	data, err := a.mgr.ExportTasksJSON()
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// ImportTasksJSON 导入任务列表 JSON。
+func (a *App) ImportTasksJSON(data string) engine.BatchAddResult {
+	res, err := a.mgr.ImportTasksJSON([]byte(data))
+	if err != nil {
+		return engine.BatchAddResult{Errors: []string{err.Error()}}
+	}
+	return res
+}
+
+// onQueueIdle 全部下载结束后按设置执行动作（通知回调，须锁外）。
+func (a *App) onQueueIdle() {
+	if a.mgr == nil {
+		return
+	}
+	action := a.mgr.GetSettings().AfterComplete
+	if action == engine.AfterCompleteNone || action == "" {
+		return
+	}
+	openDir := a.mgr.GetSettings().SaveDir
+	// 打开最后一个完成任务所在目录更实用
+	for _, t := range a.mgr.GetTasks() {
+		if t.Status == engine.StatusCompleted && t.SaveDir != "" {
+			openDir = t.SaveDir
+			break
+		}
+	}
+	err := engine.RunAfterCompleteAction(action, openDir)
+	if engine.IsExitAppAction(err) {
+		a.requestQuit()
+		return
+	}
+	if err != nil {
+		runtime.LogWarningf(a.ctx, "完成后动作失败: %v", err)
+	}
+}
 
 // RemoveTask 删除任务记录；deleteFiles 为 true 时连同已下载文件一起删除。
 func (a *App) RemoveTask(id string, deleteFiles bool) error {

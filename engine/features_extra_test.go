@@ -56,6 +56,14 @@ func TestAddTasksBatch(t *testing.T) {
 	if len(res.Errors) != 1 {
 		t.Fatalf("失败条数 = %d, want 1", len(res.Errors))
 	}
+	waitFor(t, func() bool {
+		for _, tk := range m.GetTasks() {
+			if tk.Status == StatusRunning || tk.Status == StatusQueued {
+				return false
+			}
+		}
+		return true
+	}, 15*time.Second)
 }
 
 func TestNormalizeChecksumAlgo(t *testing.T) {

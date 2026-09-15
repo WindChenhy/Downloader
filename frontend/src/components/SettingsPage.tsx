@@ -60,6 +60,7 @@ export default function SettingsPage({
     closeAction: settings.closeAction ?? 'ask',
     dirCategories: settings.dirCategories ?? [],
     autoExtract: settings.autoExtract ?? false,
+    afterComplete: settings.afterComplete ?? 'none',
   });
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState('');
@@ -340,6 +341,71 @@ export default function SettingsPage({
         label="暂停任务通知"
         hint="默认关闭"
       />
+
+      <h3>全部完成动作</h3>
+      <label className="field">
+        <span>当所有任务下载结束后</span>
+        <select
+          value={form.afterComplete ?? 'none'}
+          onChange={(e) => set({afterComplete: e.target.value as Settings['afterComplete']})}
+        >
+          <option value="none">不执行</option>
+          <option value="open_dir">打开下载目录</option>
+          <option value="shutdown">关机（60 秒后）</option>
+          <option value="sleep">睡眠</option>
+          <option value="exit_app">退出本程序</option>
+        </select>
+      </label>
+
+      <h3>任务列表</h3>
+      <div className="field-grid">
+        <button
+          type="button"
+          className="btn ghost"
+          onClick={async () => {
+            try {
+              const json = await api.exportTasksJson();
+              const blob = new Blob([json], {type: 'application/json'});
+              const a = document.createElement('a');
+              a.href = URL.createObjectURL(blob);
+              a.download = `downloader-tasks-${Date.now()}.json`;
+              a.click();
+              URL.revokeObjectURL(a.href);
+              setError('');
+            } catch (e) {
+              setError(`导出失败：${e}`);
+            }
+          }}
+        >
+          导出任务列表
+        </button>
+        <label className="btn ghost" style={{cursor: 'pointer', textAlign: 'center'}}>
+          导入任务列表
+          <input
+            type="file"
+            accept="application/json,.json"
+            style={{display: 'none'}}
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              try {
+                const text = await file.text();
+                const res = await api.importTasksJson(text);
+                const ok = res.tasks?.length ?? 0;
+                const bad = res.errors?.length ?? 0;
+                setError(
+                  bad
+                    ? `导入完成：新建 ${ok}，跳过/失败 ${bad}\n${(res.errors || []).join('\n')}`
+                    : `已导入 ${ok} 个任务`,
+                );
+              } catch (err) {
+                setError(`导入失败：${err}`);
+              }
+              e.target.value = '';
+            }}
+          />
+        </label>
+      </div>
 
       <h3>窗口</h3>
       <div className="field">

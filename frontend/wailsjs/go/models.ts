@@ -7,6 +7,9 @@ export namespace engine {
 	    customName: string;
 	    checksumAlgo: string;
 	    checksumExpected: string;
+	    priority: number;
+	    startAt: string;
+	    speedLimit: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new AddTaskParams(source);
@@ -20,6 +23,9 @@ export namespace engine {
 	        this.customName = source["customName"];
 	        this.checksumAlgo = source["checksumAlgo"];
 	        this.checksumExpected = source["checksumExpected"];
+	        this.priority = source["priority"];
+	        this.startAt = source["startAt"];
+	        this.speedLimit = source["speedLimit"];
 	    }
 	}
 	export class Task {
@@ -40,6 +46,10 @@ export namespace engine {
 	    // Go type: time
 	    finishedAt: any;
 	    avgSpeed: number;
+	    priority: number;
+	    // Go type: time
+	    startAt: any;
+	    speedLimit: number;
 	    checksumAlgo?: string;
 	    checksumExpected?: string;
 	    checksumActual?: string;
@@ -66,6 +76,9 @@ export namespace engine {
 	        this.activeMs = source["activeMs"];
 	        this.finishedAt = this.convertValues(source["finishedAt"], null);
 	        this.avgSpeed = source["avgSpeed"];
+	        this.priority = source["priority"];
+	        this.startAt = this.convertValues(source["startAt"], null);
+	        this.speedLimit = source["speedLimit"];
 	        this.checksumAlgo = source["checksumAlgo"];
 	        this.checksumExpected = source["checksumExpected"];
 	        this.checksumActual = source["checksumActual"];
@@ -157,6 +170,7 @@ export namespace engine {
 	    notifyOnPause: boolean;
 	    notifyOnComplete: boolean;
 	    notifyOnFail: boolean;
+	    afterComplete: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -184,6 +198,7 @@ export namespace engine {
 	        this.notifyOnPause = source["notifyOnPause"];
 	        this.notifyOnComplete = source["notifyOnComplete"];
 	        this.notifyOnFail = source["notifyOnFail"];
+	        this.afterComplete = source["afterComplete"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

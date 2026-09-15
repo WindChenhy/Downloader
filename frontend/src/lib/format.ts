@@ -76,6 +76,57 @@ export function parseDownloadUrls(text: string): string[] {
     .filter((s) => /^https?:\/\//i.test(s));
 }
 
+/**
+ * expandSequenceToken 展开 `{1..10}` / `{001..010:2}` 序列占位。
+ * 宽度取较大端点的十进制位数（可补零）。
+ */
+export function expandSequenceToken(token: string, pad: number, step: number): string[] {
+  const [a, b] = token.split('..');
+  const start = Number(a);
+  const end = Number(b);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return [];
+  const [lo, hi] = start <= end ? [start, end] : [end, start];
+  const s = Math.max(1, step | 0);
+  const out: string[] = [];
+  const width = Math.max(String(lo).length, String(hi).length, pad);
+  const dir = start <= end ? 1 : -1;
+  if (dir > 0) {
+    for (let i = lo; i <= hi; i += s) out.push(String(i).padStart(width, '0'));
+  } else {
+    for (let i = lo; i >= hi; i -= s) out.push(String(i).padStart(width, '0'));
+  }
+  return out;
+}
+
+/**
+ * expandSequenceUrls 展开含 `{a..b}` / `{a..b:step}` 的链接。
+ * 例：`https://x/f_{1..3}.zip` → 三条链接。无序列时原样返回。
+ */
+export function expandSequenceUrls(text: string): string[] {
+  const lines = text.split(/[\r\n]+/).map((l) => l.trim()).filter(Boolean);
+  const out: string[] = [];
+  const re = /\{(\d+)\.\.(\d+)(?::(\d+))?\}/;
+  for (const line of lines) {
+    const m = line.match(re);
+    if (!m) {
+      out.push(line);
+      continue;
+    }
+    const [, a, b, stepRaw] = m;
+    const step = stepRaw ? Number(stepRaw) : 1;
+    const nums = expandSequenceToken(`${a}..${b}`, 0, step);
+    for (const n of nums) {
+      out.push(line.replace(m[0], n));
+    }
+  }
+  return out;
+}
+
+/** 串联：先展开序列号，再过滤为合法下载链接。 */
+export function parseAndExpandUrls(text: string): string[] {
+  return parseDownloadUrls(expandSequenceUrls(text).join('\n'));
+}
+
 export const checksumStatusMeta: Record<string, {label: string; cls: string}> = {
   ok: {label: '校验通过', cls: 'completed'},
   mismatch: {label: '校验失败', cls: 'failed'},

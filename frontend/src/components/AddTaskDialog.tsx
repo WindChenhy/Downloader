@@ -2,7 +2,7 @@ import {useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent} fro
 
 import type {Settings} from '../types';
 import {api} from '../api';
-import {parseDownloadUrls} from '../lib/format';
+import {parseAndExpandUrls} from '../lib/format';
 
 interface Props {
   settings: Settings;
@@ -18,22 +18,29 @@ function autoGrow(el: HTMLTextAreaElement | null) {
   el.style.height = `${el.scrollHeight}px`;
 }
 
+function toLocalInputValue(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: Props) {
   const [url, setUrl] = useState(initialUrl ?? '');
   const [customName, setCustomName] = useState('');
   const [saveDir, setSaveDir] = useState(settings.saveDir);
   const [connections, setConnections] = useState(settings.connections);
-  const [categoryIdx, setCategoryIdx] = useState(-1); // -1 = 默认/自定义目录
+  const [categoryIdx, setCategoryIdx] = useState(-1);
   const [checksumAlgo, setChecksumAlgo] = useState('');
   const [checksumExpected, setChecksumExpected] = useState('');
+  const [priority, setPriority] = useState(1);
+  const [startAtLocal, setStartAtLocal] = useState('');
+  const [speedLimitKb, setSpeedLimitKb] = useState(0);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const urlRef = useRef<HTMLTextAreaElement>(null);
 
-  const urls = useMemo(() => parseDownloadUrls(url), [url]);
+  const urls = useMemo(() => parseAndExpandUrls(url), [url]);
   const multi = urls.length > 1;
 
-  // 剪贴板监听推来新链接时更新预填内容
   useEffect(() => {
     if (initialUrl) setUrl(initialUrl);
   }, [initialUrl]);
@@ -57,13 +64,17 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
 
   const submit = async () => {
     if (urls.length === 0) {
-      setError('请输入至少一条 http/https 下载链接（可多行批量）');
+      setError('请输入至少一条 http/https 下载链接（支持多行批量与 {1..10} 序列）');
       return;
     }
     setBusy(true);
     setError('');
     try {
-      // 批量时不套用自定义文件名/校验和（避免多文件共用同一校验值）
+      let startAt = '';
+      if (startAtLocal) {
+        const ts = new Date(startAtLocal);
+        if (!Number.isNaN(ts.getTime())) startAt = ts.toISOString();
+      }
       const items = urls.map((u) => ({
         url: u,
         saveDir: saveDir.trim(),
@@ -71,6 +82,9 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
         customName: multi ? '' : customName.trim(),
         checksumAlgo: multi ? '' : checksumAlgo,
         checksumExpected: multi ? '' : checksumExpected.trim(),
+        priority,
+        startAt,
+        speedLimit: Math.max(0, speedLimitKb) * 1024,
       }));
       const result = await api.addTasks(items);
       onAdded();
@@ -93,6 +107,7 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="dialog">
         <h2>新建下载</h2>
+        <div className="dialog-body">
         <label className="field">
           <span>
             下载链接
@@ -107,7 +122,7 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
             autoFocus
             rows={1}
             className="field-textarea"
-            placeholder="粘贴 http/https 链接；多行可批量创建"
+            placeholder="粘贴链接；多行批量；支持序列如 https://x.com/f_{1..10}.zip"
             value={url}
             onChange={onUrlChange}
           />
@@ -158,16 +173,43 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
             }}
           />
         </label>
-        <label className="field">
-          <span>连接数（1–128，多连接可提速）</span>
-          <input
-            type="number"
-            min={1}
-            max={128}
-            value={connections}
-            onChange={(e) => setConnections(Number(e.target.value))}
-          />
-        </label>
+        <div className="field-grid">
+          <label className="field">
+            <span>连接数（1–128）</span>
+            <input
+              type="number"
+              min={1}
+              max={128}
+              value={connections}
+              onChange={(e) => setConnections(Number(e.target.value))}
+            />
+          </label>
+          <label className="field">
+            <span>优先级</span>
+            <select value={priority} onChange={(e) => setPriority(Number(e.target.value))}>
+              <option value={0}>低</option>
+              <option value={1}>普通</option>
+              <option value={2}>高</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>限速（KB/s，0 不限）</span>
+            <input
+              type="number"
+              min={0}
+              value={speedLimitKb}
+              onChange={(e) => setSpeedLimitKb(Math.max(0, Number(e.target.value)))}
+            />
+          </label>
+          <label className="field">
+            <span>定时开始（可选）</span>
+            <input
+              type="datetime-local"
+              value={startAtLocal}
+              onChange={(e) => setStartAtLocal(e.target.value)}
+            />
+          </label>
+        </div>
         {!multi && (
           <div className="field-grid">
             <label className="field">
@@ -185,12 +227,12 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
                 type="text"
                 value={checksumExpected}
                 placeholder="留空则仅计算摘要"
-                disabled={!checksumAlgo && !checksumExpected}
                 onChange={(e) => setChecksumExpected(e.target.value)}
               />
             </label>
           </div>
         )}
+        </div>
         {error && <div className="dialog-error" style={{whiteSpace: 'pre-wrap'}}>{error}</div>}
         <div className="dialog-actions">
           <button className="btn ghost" onClick={onClose} disabled={busy}>
@@ -204,3 +246,6 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
     </div>
   );
 }
+
+// 避免未使用告警（保留导出便于测试本地时间格式）
+export {toLocalInputValue};

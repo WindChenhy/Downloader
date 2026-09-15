@@ -1,6 +1,7 @@
 import {useEffect, useMemo, useRef, useState} from 'react';
 
 import type {Status, Task} from '../types';
+import {isScheduled} from '../types';
 import {formatBytes, formatDuration, formatETA, formatSpeed, percent, statusMeta, totalElapsedMs} from '../lib/format';
 import {api} from '../api';
 import {FolderIcon, PauseIcon, PlayIcon, RetryIcon, TrashIcon} from './icons';
@@ -78,6 +79,15 @@ function TaskRow({
     }
   };
 
+  const move = async (delta: -1 | 1) => {
+    try {
+      await api.moveTask(task.id, delta);
+      onChanged();
+    } catch (e) {
+      showError(`排序失败：${e}`);
+    }
+  };
+
   const openFolder = async () => {
     try {
       await api.openFolder(task.saveDir, task.fileName);
@@ -86,6 +96,10 @@ function TaskRow({
     }
   };
 
+  const scheduled = isScheduled(task);
+  const prioLabel =
+    task.priority === 2 ? '高' : task.priority === 0 ? '低' : '';
+
   return (
     <div className={`task-row status-${task.status}`} onClick={() => onRequestDetail(task)}>
       <div className="task-main">
@@ -93,7 +107,10 @@ function TaskRow({
           <span className="task-name" title={task.url}>
             {task.fileName}
           </span>
-          <span className={`chip ${meta.cls}`}>{meta.label}</span>
+          <span className={`chip ${scheduled ? 'queued' : meta.cls}`}>
+            {scheduled ? '定时' : meta.label}
+          </span>
+          {prioLabel && <span className="chip running">{prioLabel}优</span>}
         </div>
         <div className="task-sub">
           <span>
@@ -102,6 +119,12 @@ function TaskRow({
           </span>
           {task.totalSize > 0 && <span className="task-pct">{pct}%</span>}
           <span>{task.connections} 连接</span>
+          {task.speedLimit > 0 && <span>限 {formatSpeed(task.speedLimit)}</span>}
+          {scheduled && (
+            <span>
+              {new Date(task.startAt as string).toLocaleString('zh-CN', {hour12: false})} 开始
+            </span>
+          )}
           {running && <span className="task-speed">{formatSpeed(task.speed) || '—'}</span>}
           {running && eta > 0 && <span>剩余 {formatETA(eta)}</span>}
           {(task.status === 'completed' || task.status === 'failed') && (
@@ -126,6 +149,12 @@ function TaskRow({
         </div>
       </div>
       <div className="task-actions" onClick={(e) => e.stopPropagation()}>
+        <button className="btn icon" title="上移" onClick={() => move(-1)}>
+          ↑
+        </button>
+        <button className="btn icon" title="下移" onClick={() => move(1)}>
+          ↓
+        </button>
         <button className="btn icon" title="打开所在目录" onClick={openFolder}>
           <FolderIcon />
         </button>
