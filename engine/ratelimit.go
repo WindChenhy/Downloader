@@ -9,7 +9,8 @@ import (
 
 const readChunkSize = 32 << 10 // 限速粒度：单次读取的配额块大小
 
-// rateLimiter 全局下载限速器：配额随时间匀速累积，允许最多 1 秒的突发。
+// rateLimiter 令牌式限速器：配额随时间匀速累积。
+// 用于全局限速；每任务限速也复用同一实现（limitedReader.extra）。
 // limit <= 0 表示不限速，Wait 立即返回。
 type rateLimiter struct {
 	mu     sync.Mutex
@@ -22,6 +23,7 @@ func newRateLimiter(limit int64) *rateLimiter {
 	return &rateLimiter{limit: limit, last: time.Now()}
 }
 
+// SetLimit 立即调整限速并清空已累积配额。
 func (l *rateLimiter) SetLimit(limit int64) {
 	l.mu.Lock()
 	l.limit = limit

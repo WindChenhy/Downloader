@@ -14,7 +14,7 @@ import (
 // ProbeResult 是对 URL 的预探测结果。
 type ProbeResult struct {
 	FinalURL     string
-	TotalSize    int64  // <=0 表示未知
+	TotalSize    int64 // <=0 表示未知
 	AcceptsRange bool
 	ETag         string
 	LastModified string

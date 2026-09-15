@@ -33,6 +33,7 @@ func (a *App) initTray() {
 	}()
 }
 
+// onTrayReady 托盘消息循环就绪后初始化菜单与点击处理。
 func (a *App) onTrayReady() {
 	systray.SetIcon(trayIcon)
 	systray.SetTooltip("Downloader - 多线程下载工具")

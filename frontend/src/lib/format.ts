@@ -1,5 +1,6 @@
 import type {Status, Task} from '../types';
 
+/** formatBytes 字节数 → 人读大小，如 `1.2 MB`。 */
 export function formatBytes(n: number): string {
   if (!n || n < 0) return '—';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -12,11 +13,13 @@ export function formatBytes(n: number): string {
   return `${v >= 100 || i === 0 ? v.toFixed(0) : v.toFixed(1)} ${units[i]}`;
 }
 
+/** formatSpeed 字节/秒 → `1.2 MB/s`；非正数返回空串。 */
 export function formatSpeed(bytesPerSec: number): string {
   if (!bytesPerSec || bytesPerSec <= 0) return '';
   return `${formatBytes(bytesPerSec)}/s`;
 }
 
+/** formatETA 秒 → 剩余时间文案。 */
 export function formatETA(seconds: number): string {
   if (!seconds || seconds <= 0 || !isFinite(seconds)) return '';
   const s = Math.round(seconds);
@@ -134,12 +137,14 @@ export const checksumStatusMeta: Record<string, {label: string; cls: string}> = 
   skipped: {label: '已计算', cls: 'paused'},
 };
 
+/** percent 下载进度百分比（0–100）；完成态固定 100。 */
 export function percent(task: {downloaded: number; totalSize: number; status: Status}): number {
   if (task.status === 'completed') return 100;
   if (task.totalSize <= 0) return 0;
   return Math.min(100, Math.round((task.downloaded / task.totalSize) * 100));
 }
 
+/** statusMeta 任务状态的中文标签与样式类名。 */
 export const statusMeta: Record<Status, {label: string; cls: string}> = {
   queued: {label: '排队中', cls: 'queued'},
   running: {label: '下载中', cls: 'running'},

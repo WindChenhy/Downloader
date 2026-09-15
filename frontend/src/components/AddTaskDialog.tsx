@@ -18,11 +18,6 @@ function autoGrow(el: HTMLTextAreaElement | null) {
   el.style.height = `${el.scrollHeight}px`;
 }
 
-function toLocalInputValue(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
 export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: Props) {
   const [url, setUrl] = useState(initialUrl ?? '');
   const [customName, setCustomName] = useState('');
@@ -246,6 +241,3 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
     </div>
   );
 }
-
-// 避免未使用告警（保留导出便于测试本地时间格式）
-export {toLocalInputValue};
