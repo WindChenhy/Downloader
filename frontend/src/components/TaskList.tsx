@@ -1,7 +1,7 @@
 import {useEffect, useMemo, useRef, useState} from 'react';
 
 import type {Status, Task} from '../types';
-import {formatBytes, formatETA, formatSpeed, percent, statusMeta} from '../lib/format';
+import {formatBytes, formatDuration, formatETA, formatSpeed, percent, statusMeta, totalElapsedMs} from '../lib/format';
 import {api} from '../api';
 import {FolderIcon, PauseIcon, PlayIcon, RetryIcon, TrashIcon} from './icons';
 import DeleteTaskDialog from './DeleteTaskDialog';
@@ -104,6 +104,11 @@ function TaskRow({
           <span>{task.connections} 连接</span>
           {running && <span className="task-speed">{formatSpeed(task.speed) || '—'}</span>}
           {running && eta > 0 && <span>剩余 {formatETA(eta)}</span>}
+          {(task.status === 'completed' || task.status === 'failed') && (
+            <span title="纯下载耗时 / 总耗时（含暂停，已冻结）">
+              用时 {formatDuration(task.activeMs || 0)} · 总 {formatDuration(totalElapsedMs(task))}
+            </span>
+          )}
           {(localErr || (task.status === 'failed' && task.error)) && (
             <span className="task-error" title={localErr || task.error}>
               {localErr || task.error}
@@ -143,7 +148,9 @@ export default function TaskList({tasks, onChanged}: Props) {
   const [filter, setFilter] = useState<'all' | Status>('all');
   const [query, setQuery] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<Task | null>(null);
-  const [detailTarget, setDetailTarget] = useState<Task | null>(null);
+  // 只存 ID：详情弹窗始终用列表里的实时任务，下载耗时才能跟着 progressLoop 刷新
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const detailTask = detailId ? (tasks.find((t) => t.id === detailId) ?? null) : null;
 
   const counts = useMemo(() => {
     const c = new Map<string, number>();
@@ -204,7 +211,7 @@ export default function TaskList({tasks, onChanged}: Props) {
             task={t}
             onChanged={onChanged}
             onRequestDelete={setDeleteTarget}
-            onRequestDetail={setDetailTarget}
+            onRequestDetail={(t) => setDetailId(t.id)}
           />
         ))
       )}
@@ -215,8 +222,8 @@ export default function TaskList({tasks, onChanged}: Props) {
           onDeleted={onChanged}
         />
       )}
-      {detailTarget && (
-        <TaskDetailDialog task={detailTarget} onClose={() => setDetailTarget(null)} />
+      {detailTask && (
+        <TaskDetailDialog task={detailTask} onClose={() => setDetailId(null)} />
       )}
     </div>
   );

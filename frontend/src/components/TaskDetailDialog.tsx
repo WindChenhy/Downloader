@@ -1,9 +1,16 @@
-import {useState} from 'react';
+import {useEffect, useState} from 'react';
 
 import {ClipboardSetText} from '../../wailsjs/runtime/runtime';
 
 import type {Task} from '../types';
-import {formatBytes, percent, statusMeta} from '../lib/format';
+import {
+  activeElapsedMs,
+  formatBytes,
+  formatDuration,
+  percent,
+  statusMeta,
+  totalElapsedMs,
+} from '../lib/format';
 import {CopyIcon} from './icons';
 
 interface Props {
@@ -42,6 +49,13 @@ function DetailRow({label, value, mono, onCopy, copied}: {
 
 export default function TaskDetailDialog({task, onClose}: Props) {
   const [copied, setCopied] = useState('');
+  // 暂停/排队时后端不再推进度，总耗时靠本地秒表继续走；完成后 totalElapsedMs 已冻结
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+
   const meta = statusMeta[task.status];
   const fullPath = `${task.saveDir.replace(/\//g, '\\')}\\${task.fileName}`;
 
@@ -87,9 +101,27 @@ export default function TaskDetailDialog({task, onClose}: Props) {
         <DetailRow label="状态" value={meta.label} />
         <DetailRow label="连接数" value={String(task.connections)} />
         <DetailRow
+          label="下载耗时"
+          value={formatDuration(activeElapsedMs(task))}
+          // 纯下载：暂停期间不累计；完成后冻结
+        />
+        <DetailRow
+          label="总耗时"
+          value={formatDuration(totalElapsedMs(task, now))}
+          // 创建到结束（含暂停）；已完成/失败后不再随时间增长
+        />
+        <DetailRow
           label="创建时间"
           value={new Date(task.createdAt).toLocaleString('zh-CN', {hour12: false})}
         />
+        {task.finishedAt &&
+          !task.finishedAt.startsWith('0001-01-01') &&
+          (task.status === 'completed' || task.status === 'failed') && (
+            <DetailRow
+              label="结束时间"
+              value={new Date(task.finishedAt).toLocaleString('zh-CN', {hour12: false})}
+            />
+          )}
         <div className="dialog-actions">
           <button className="btn primary" onClick={onClose}>
             关闭

@@ -426,3 +426,95 @@ func TestManagerPersistenceAcrossRestart(t *testing.T) {
 		t.Fatal("重启恢复后内容不一致")
 	}
 }
+
+func TestManagerActiveTimeAndEvents(t *testing.T) {
+	content := newContent(t, 8000)
+	ts := &testServer{content: content, etag: `"abc"`}
+	ts.gate = make(chan struct{})
+	srv := httptest.NewServer(ts)
+	defer srv.Close()
+
+	var mu sync.Mutex
+	created, paused, finished := 0, 0, 0
+	m, err := NewManager(t.TempDir(), func(name string, _ ...interface{}) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch name {
+		case "task:created":
+			created++
+		case "task:paused":
+			paused++
+		case "task:finished":
+			finished++
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	saveDir := t.TempDir()
+	if _, err := m.AddTask(srv.URL, saveDir, 2, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	if created != 1 {
+		mu.Unlock()
+		t.Fatalf("task:created 次数 = %d, want 1", created)
+	}
+	mu.Unlock()
+
+	waitFor(t, func() bool { return m.GetTasks()[0].Status == StatusRunning }, 5*time.Second)
+	if err := m.PauseTask(m.GetTasks()[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return m.GetTasks()[0].Status == StatusPaused }, 5*time.Second)
+
+	mu.Lock()
+	if paused != 1 {
+		mu.Unlock()
+		t.Fatalf("task:paused 次数 = %d, want 1", paused)
+	}
+	if finished != 0 {
+		mu.Unlock()
+		t.Fatalf("暂停不应触发 task:finished, got %d", finished)
+	}
+	mu.Unlock()
+
+	// 暂停期间活跃时长应已结算且不再增长
+	pausedActive := m.GetTasks()[0].ActiveMs
+	if pausedActive < 0 {
+		t.Fatalf("ActiveMs = %d, want >= 0", pausedActive)
+	}
+	time.Sleep(80 * time.Millisecond)
+	if got := m.GetTasks()[0].ActiveMs; got != pausedActive {
+		t.Fatalf("暂停后 ActiveMs 不应增长: %d -> %d", pausedActive, got)
+	}
+	if m.GetTasks()[0].FinishedAt.IsZero() != true {
+		t.Fatal("暂停任务不应写 FinishedAt")
+	}
+
+	ts.releaseGate()
+	if err := m.ResumeTask(m.GetTasks()[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return m.GetTasks()[0].Status == StatusCompleted }, 10*time.Second)
+
+	tk := m.GetTasks()[0]
+	if tk.ActiveMs < pausedActive {
+		t.Fatalf("完成后 ActiveMs 应不小于暂停时: %d < %d", tk.ActiveMs, pausedActive)
+	}
+	if tk.FinishedAt.IsZero() {
+		t.Fatal("完成后应写入 FinishedAt")
+	}
+	if !tk.FinishedAt.After(tk.CreatedAt) {
+		t.Fatalf("FinishedAt %v 应晚于 CreatedAt %v", tk.FinishedAt, tk.CreatedAt)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if finished != 1 {
+		t.Fatalf("task:finished 次数 = %d, want 1", finished)
+	}
+	if paused != 1 {
+		t.Fatalf("完成不应再发 task:paused, got %d", paused)
+	}
+}

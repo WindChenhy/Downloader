@@ -1,4 +1,4 @@
-import type {Status} from '../types';
+import type {Status, Task} from '../types';
 
 export function formatBytes(n: number): string {
   if (!n || n < 0) return '—';
@@ -25,6 +25,47 @@ export function formatETA(seconds: number): string {
   if (m < 60) return `${m} 分 ${s % 60} 秒`;
   const h = Math.floor(m / 60);
   return `${h} 小时 ${m % 60} 分`;
+}
+
+/** formatDuration 毫秒 → 人读时长，如 `1分23秒` / `2小时5分`。 */
+export function formatDuration(ms: number): string {
+  if (!ms || ms < 0 || !isFinite(ms)) return '—';
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s} 秒`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} 分 ${s % 60} 秒`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} 小时 ${m % 60} 分`;
+  const d = Math.floor(h / 24);
+  return `${d} 天 ${h % 24} 小时`;
+}
+
+/** isEndedStatus 任务是否已停止计时（完成/失败）。 */
+function isEndedStatus(status: Status): boolean {
+  return status === 'completed' || status === 'failed';
+}
+
+/**
+ * totalElapsedMs 创建到结束的总耗时（含暂停）。
+ * - 已完成/失败：只用冻结的 finishedAt，不再随当前时间增长；无有效结束时间时返回 0。
+ * - 进行中/暂停：用 now - createdAt。
+ */
+export function totalElapsedMs(task: Task, now = Date.now()): number {
+  const created = Date.parse(task.createdAt);
+  if (Number.isNaN(created)) return 0;
+
+  if (isEndedStatus(task.status)) {
+    if (!task.finishedAt || task.finishedAt.startsWith('0001-01-01')) return 0;
+    const end = Date.parse(task.finishedAt);
+    if (Number.isNaN(end) || end <= created) return 0;
+    return end - created;
+  }
+  return Math.max(0, now - created);
+}
+
+/** activeElapsedMs 活跃下载耗时；未结束任务的 running 部分由后端并入 activeMs。 */
+export function activeElapsedMs(task: Task): number {
+  return Math.max(0, task.activeMs || 0);
 }
 
 export function percent(task: {downloaded: number; totalSize: number; status: Status}): number {

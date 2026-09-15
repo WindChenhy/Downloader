@@ -88,6 +88,9 @@ export namespace engine {
 	    error?: string;
 	    // Go type: time
 	    createdAt: any;
+	    activeMs: number;
+	    // Go type: time
+	    finishedAt: any;
 	
 	    static createFrom(source: any = {}) {
 	        return new Task(source);
@@ -107,6 +110,8 @@ export namespace engine {
 	        this.connections = source["connections"];
 	        this.error = source["error"];
 	        this.createdAt = this.convertValues(source["createdAt"], null);
+	        this.activeMs = source["activeMs"];
+	        this.finishedAt = this.convertValues(source["finishedAt"], null);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

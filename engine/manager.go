@@ -15,13 +15,14 @@ import (
 
 // taskHandle 一个任务的运行期状态（Task 本体 + 当前运行的控制柄）。
 type taskHandle struct {
-	task   Task
-	cancel context.CancelFunc
-	done   chan struct{} // 本轮运行的 goroutine 退出后关闭
-	live   atomic.Int64  // 本轮运行已写入字节数
-	base   int64         // 本轮起点（续传时为已完成字节数），mu 保护
-	prev   int64         // 速度计算的上一次快照，mu 保护
-	prevAt time.Time
+	task         Task
+	cancel       context.CancelFunc
+	done         chan struct{} // 本轮运行的 goroutine 退出后关闭
+	live         atomic.Int64  // 本轮运行已写入字节数
+	base         int64         // 本轮起点（续传时为已完成字节数），mu 保护
+	prev         int64         // 速度计算的上一次快照，mu 保护
+	prevAt       time.Time
+	runStartedAt time.Time // 本轮运行开始时刻；零值表示当前未在下载，mu 保护
 }
 
 // Manager 管理全部下载任务：排队、并发控制、持久化与事件通知。
@@ -126,6 +127,7 @@ func (m *Manager) AddTask(rawURL, saveDir string, connections int, customName st
 	m.order = append(m.order, t.ID)
 	m.dispatchLocked()
 	m.changedLocked()
+	m.notify("task:created", t) // 供系统通知等上层钩子使用
 	return t, nil
 }
 
@@ -139,10 +141,12 @@ func (m *Manager) PauseTask(id string) error {
 	switch h.task.Status {
 	case StatusQueued:
 		h.task.Status = StatusPaused
+		t := h.task
 		m.changedLocked()
+		m.notify("task:paused", t) // 排队中暂停不经 finishTask，这里直接通知
 	case StatusRunning:
 		if h.cancel != nil {
-			h.cancel() // run goroutine 退出后由 finishTask 置为 Paused
+			h.cancel() // run goroutine 退出后由 finishTask 置为 Paused 并通知
 		}
 	}
 	return nil
@@ -274,6 +278,7 @@ func (m *Manager) dispatchLocked() {
 		h.live.Store(0)
 		h.prev = h.task.Downloaded
 		h.prevAt = time.Now()
+		h.runStartedAt = time.Now() // 活跃下载耗时从本轮开始累计
 		m.running++
 
 		ctx, cancel := context.WithCancel(context.Background())
@@ -297,6 +302,11 @@ func (m *Manager) finishTask(h *taskHandle, err error) {
 	m.running--
 	h.cancel = nil
 	h.task.Speed = 0
+	// 结算本轮活跃下载耗时（暂停前一直在下的时间）
+	if !h.runStartedAt.IsZero() {
+		h.task.ActiveMs += time.Since(h.runStartedAt).Milliseconds()
+		h.runStartedAt = time.Time{}
+	}
 
 	switch {
 	case err == nil:
@@ -305,6 +315,7 @@ func (m *Manager) finishTask(h *taskHandle, err error) {
 		if h.task.TotalSize > 0 {
 			h.task.Downloaded = h.task.TotalSize
 		}
+		h.task.FinishedAt = time.Now()
 		_ = os.Remove(m.store.StatePath(h.task.ID))
 	case errors.Is(err, ErrPaused):
 		h.task.Status = StatusPaused
@@ -314,11 +325,16 @@ func (m *Manager) finishTask(h *taskHandle, err error) {
 		h.task.Status = StatusFailed
 		h.task.Error = err.Error()
 		h.task.Downloaded = m.exactDownloadedLocked(h)
+		h.task.FinishedAt = time.Now()
 	}
 	t := h.task
 	m.persistTasksLocked()
 	m.notify("tasks:changed", m.snapshotLocked())
-	m.notify("task:finished", t) // 供系统通知等上层钩子使用
+	if h.task.Status == StatusPaused {
+		m.notify("task:paused", t)
+	} else {
+		m.notify("task:finished", t) // 供系统通知等上层钩子使用（完成/失败）
+	}
 	m.dispatchLocked()
 }
 
@@ -386,6 +402,7 @@ func (m *Manager) cleanupOrphanStagingLocked() {
 
 func (m *Manager) snapshotLocked() []Task {
 	out := make([]Task, 0, len(m.order))
+	now := time.Now()
 	for _, id := range m.order {
 		h := m.handles[id]
 		t := h.task
@@ -395,6 +412,10 @@ func (m *Manager) snapshotLocked() []Task {
 				d = t.TotalSize
 			}
 			t.Downloaded = d
+			// 展示用：把本轮尚未结算的活跃时长并入快照
+			if !h.runStartedAt.IsZero() {
+				t.ActiveMs += now.Sub(h.runStartedAt).Milliseconds()
+			}
 		}
 		out = append(out, t)
 	}
@@ -446,6 +467,9 @@ func (m *Manager) progressLoop() {
 				h.prev = d
 				h.prevAt = now
 				t.Downloaded = d
+				if !h.runStartedAt.IsZero() {
+					t.ActiveMs += now.Sub(h.runStartedAt).Milliseconds()
+				}
 			}
 			out = append(out, t)
 		}

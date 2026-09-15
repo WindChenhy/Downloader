@@ -36,10 +36,20 @@ func (a *App) startup(ctx context.Context) {
 
 	mgr, err := engine.NewManager(dataDir, func(name string, data ...interface{}) {
 		runtime.EventsEmit(ctx, name, data...)
-		if name == "task:finished" && len(data) > 0 {
-			if t, ok := data[0].(engine.Task); ok {
-				a.notifyTaskFinished(t)
-			}
+		if len(data) == 0 {
+			return
+		}
+		t, ok := data[0].(engine.Task)
+		if !ok {
+			return
+		}
+		switch name {
+		case "task:created":
+			a.notifyTaskCreated(t)
+		case "task:paused":
+			a.notifyTaskPaused(t)
+		case "task:finished":
+			a.notifyTaskFinished(t)
 		}
 	})
 	if err != nil {
@@ -80,6 +90,7 @@ func (a *App) AddTask(url string, saveDir string, connections int, customName st
 
 func (a *App) PauseTask(id string) error  { return a.mgr.PauseTask(id) }
 func (a *App) ResumeTask(id string) error { return a.mgr.ResumeTask(id) }
+
 // RemoveTask 删除任务记录；deleteFiles 为 true 时连同已下载文件一起删除。
 func (a *App) RemoveTask(id string, deleteFiles bool) error {
 	return a.mgr.RemoveTask(id, deleteFiles)
