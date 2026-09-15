@@ -16,6 +16,27 @@ export interface Task {
   activeMs: number;
   /** 结束时刻；零值/空表示尚未完成或失败 */
   finishedAt?: string;
+  /** 平均下载速度（字节/秒），按活跃时长 */
+  avgSpeed: number;
+  /** 校验和（可选） */
+  checksumAlgo?: string;
+  checksumExpected?: string;
+  checksumActual?: string;
+  checksumStatus?: 'ok' | 'mismatch' | 'error' | 'skipped' | '';
+}
+
+export interface AddTaskParams {
+  url: string;
+  saveDir: string;
+  connections: number;
+  customName?: string;
+  checksumAlgo?: string;
+  checksumExpected?: string;
+}
+
+export interface BatchAddResult {
+  tasks: Task[];
+  errors: string[];
 }
 
 export type ProxyMode = 'none' | 'system' | 'custom';
@@ -43,6 +64,11 @@ export interface Settings {
   closeAction: CloseAction;
   dirCategories: DirCategory[];
   autoExtract: boolean;
+  /** 系统通知：完成/失败默认开，创建/暂停默认关 */
+  notifyOnCreate: boolean;
+  notifyOnPause: boolean;
+  notifyOnComplete: boolean;
+  notifyOnFail: boolean;
 }
 
 export type ThemeMode = 'light' | 'dark' | 'system';

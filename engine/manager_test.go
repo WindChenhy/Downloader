@@ -518,3 +518,59 @@ func TestManagerActiveTimeAndEvents(t *testing.T) {
 		t.Fatalf("完成不应再发 task:paused, got %d", paused)
 	}
 }
+
+// TestNotifyCallbackCanReenterManager 通知回调里再次进入 Manager
+// （如 GetSettings）曾导致死锁：新建一直卡住、下载不跑、删除也挂起。
+func TestNotifyCallbackCanReenterManager(t *testing.T) {
+	content := newContent(t, 3000)
+	srv := httptest.NewServer(&testServer{content: content, etag: `"abc"`})
+	defer srv.Close()
+
+	var m *Manager
+	done := make(chan struct{})
+	m, err := NewManager(t.TempDir(), func(name string, _ ...interface{}) {
+		// 模拟上层在事件回调中读设置 / 列任务
+		_ = m.GetSettings()
+		_ = m.GetTasks()
+		if name == "task:created" {
+			close(done)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	saveDir := t.TempDir()
+	added := make(chan error, 1)
+	go func() {
+		_, err := m.AddTask(srv.URL, saveDir, 2, "")
+		added <- err
+	}()
+	select {
+	case err := <-added:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("AddTask 死锁：3 秒未返回")
+	}
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("task:created 事件未发出")
+	}
+
+	waitFor(t, func() bool { return m.GetTasks()[0].Status == StatusCompleted }, 10*time.Second)
+
+	// 删除同样不能挂死
+	removed := make(chan error, 1)
+	go func() { removed <- m.RemoveTask(m.GetTasks()[0].ID, false) }()
+	select {
+	case err := <-removed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("RemoveTask 死锁")
+	}
+}

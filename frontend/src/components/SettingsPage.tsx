@@ -315,6 +315,32 @@ export default function SettingsPage({
         <div className="archive-state">{form.autoExtract ? '开启' : '关闭'}</div>
       </div>
 
+      <h3>通知</h3>
+      <Switch
+        checked={form.notifyOnComplete}
+        onChange={(v) => set({notifyOnComplete: v})}
+        label="下载完成通知"
+        hint="默认开启"
+      />
+      <Switch
+        checked={form.notifyOnFail}
+        onChange={(v) => set({notifyOnFail: v})}
+        label="下载失败通知"
+        hint="默认开启"
+      />
+      <Switch
+        checked={form.notifyOnCreate}
+        onChange={(v) => set({notifyOnCreate: v})}
+        label="创建任务通知"
+        hint="默认关闭，避免批量添加时打扰"
+      />
+      <Switch
+        checked={form.notifyOnPause}
+        onChange={(v) => set({notifyOnPause: v})}
+        label="暂停任务通知"
+        hint="默认关闭"
+      />
+
       <h3>窗口</h3>
       <div className="field">
         <span>点击关闭按钮时</span>

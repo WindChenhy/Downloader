@@ -1,7 +1,8 @@
-import {useCallback, useEffect, useRef, useState, type ChangeEvent} from 'react';
+import {useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent} from 'react';
 
 import type {Settings} from '../types';
 import {api} from '../api';
+import {parseDownloadUrls} from '../lib/format';
 
 interface Props {
   settings: Settings;
@@ -23,9 +24,14 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
   const [saveDir, setSaveDir] = useState(settings.saveDir);
   const [connections, setConnections] = useState(settings.connections);
   const [categoryIdx, setCategoryIdx] = useState(-1); // -1 = 默认/自定义目录
+  const [checksumAlgo, setChecksumAlgo] = useState('');
+  const [checksumExpected, setChecksumExpected] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const urlRef = useRef<HTMLTextAreaElement>(null);
+
+  const urls = useMemo(() => parseDownloadUrls(url), [url]);
+  const multi = urls.length > 1;
 
   // 剪贴板监听推来新链接时更新预填内容
   useEffect(() => {
@@ -50,16 +56,33 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
   }, [onClose]);
 
   const submit = async () => {
-    if (!url.trim()) {
-      setError('请输入下载链接');
+    if (urls.length === 0) {
+      setError('请输入至少一条 http/https 下载链接（可多行批量）');
       return;
     }
     setBusy(true);
     setError('');
     try {
-      await api.addTask(url.trim(), saveDir.trim(), connections, customName.trim());
+      // 批量时不套用自定义文件名/校验和（避免多文件共用同一校验值）
+      const items = urls.map((u) => ({
+        url: u,
+        saveDir: saveDir.trim(),
+        connections,
+        customName: multi ? '' : customName.trim(),
+        checksumAlgo: multi ? '' : checksumAlgo,
+        checksumExpected: multi ? '' : checksumExpected.trim(),
+      }));
+      const result = await api.addTasks(items);
       onAdded();
-      onClose();
+      if (result.errors?.length) {
+        setError(
+          `已创建 ${result.tasks?.length ?? 0} 个任务；${result.errors.length} 条失败：\n` +
+            result.errors.join('\n'),
+        );
+        setBusy(false);
+      } else {
+        onClose();
+      }
     } catch (e) {
       setError(String(e).replace(/^.*:\s*/, ''));
       setBusy(false);
@@ -71,23 +94,34 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
       <div className="dialog">
         <h2>新建下载</h2>
         <label className="field">
-          <span>下载链接</span>
+          <span>
+            下载链接
+            {urls.length > 0 && (
+              <em style={{fontStyle: 'normal', opacity: 0.65, marginLeft: 8}}>
+                已识别 {urls.length} 条{multi ? '（批量）' : ''}
+              </em>
+            )}
+          </span>
           <textarea
             ref={urlRef}
             autoFocus
             rows={1}
             className="field-textarea"
-            placeholder="粘贴 http/https 链接"
+            placeholder="粘贴 http/https 链接；多行可批量创建"
             value={url}
             onChange={onUrlChange}
           />
         </label>
         <label className="field">
-          <span>重命名（留空自动从链接获取）</span>
+          <span>
+            重命名（留空自动从链接获取）
+            {multi && <em style={{fontStyle: 'normal', opacity: 0.65, marginLeft: 8}}>批量时忽略</em>}
+          </span>
           <input
             type="text"
             value={customName}
             placeholder="可选，如： ubuntu-24.04.iso"
+            disabled={multi}
             onChange={(e) => setCustomName(e.target.value)}
           />
         </label>
@@ -134,13 +168,36 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
             onChange={(e) => setConnections(Number(e.target.value))}
           />
         </label>
-        {error && <div className="dialog-error">{error}</div>}
+        {!multi && (
+          <div className="field-grid">
+            <label className="field">
+              <span>校验算法（可选）</span>
+              <select value={checksumAlgo} onChange={(e) => setChecksumAlgo(e.target.value)}>
+                <option value="">不校验</option>
+                <option value="md5">MD5</option>
+                <option value="sha1">SHA1</option>
+                <option value="sha256">SHA256</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>期望校验值（可选）</span>
+              <input
+                type="text"
+                value={checksumExpected}
+                placeholder="留空则仅计算摘要"
+                disabled={!checksumAlgo && !checksumExpected}
+                onChange={(e) => setChecksumExpected(e.target.value)}
+              />
+            </label>
+          </div>
+        )}
+        {error && <div className="dialog-error" style={{whiteSpace: 'pre-wrap'}}>{error}</div>}
         <div className="dialog-actions">
           <button className="btn ghost" onClick={onClose} disabled={busy}>
             取消
           </button>
           <button className="btn primary" onClick={submit} disabled={busy}>
-            {busy ? '添加中…' : '开始下载'}
+            {busy ? '添加中…' : multi ? `批量创建 ${urls.length} 个任务` : '开始下载'}
           </button>
         </div>
       </div>

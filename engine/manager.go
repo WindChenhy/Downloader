@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -78,13 +79,83 @@ func NewManager(dataDir string, notify func(name string, data ...interface{})) (
 	return m, nil
 }
 
+// AddTaskParams 新建任务参数；批量与单条共用。
+type AddTaskParams struct {
+	URL              string `json:"url"`
+	SaveDir          string `json:"saveDir"`
+	Connections      int    `json:"connections"`
+	CustomName       string `json:"customName"`
+	ChecksumAlgo     string `json:"checksumAlgo"`
+	ChecksumExpected string `json:"checksumExpected"`
+}
+
+// BatchAddResult 批量新建结果：成功任务列表 + 失败说明（与输入顺序对应可不保证）。
+type BatchAddResult struct {
+	Tasks  []Task   `json:"tasks"`
+	Errors []string `json:"errors"`
+}
+
 func (m *Manager) AddTask(rawURL, saveDir string, connections int, customName string) (Task, error) {
+	return m.AddTaskWithChecksum(AddTaskParams{
+		URL:         rawURL,
+		SaveDir:     saveDir,
+		Connections: connections,
+		CustomName:  customName,
+	})
+}
+
+func (m *Manager) AddTaskWithChecksum(p AddTaskParams) (Task, error) {
+	rawURL := p.URL
 	u, err := validateURL(rawURL)
 	if err != nil {
 		return Task{}, err
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	t, err := m.addTaskLocked(u, p)
+	var snap []Task
+	if err == nil {
+		snap = m.snapshotLocked()
+	}
+	m.mu.Unlock()
+	if err != nil {
+		return Task{}, err
+	}
+	// 事件必须在解锁后发出：回调可能再次进入 Manager（如 GetSettings）
+	m.notify("tasks:changed", snap)
+	m.notify("task:created", t)
+	return t, nil
+}
+
+// AddTasks 批量新建；逐条校验，失败不影响已成功项。
+func (m *Manager) AddTasks(items []AddTaskParams) BatchAddResult {
+	var out BatchAddResult
+	for i, p := range items {
+		t, err := m.AddTaskWithChecksum(p)
+		if err != nil {
+			out.Errors = append(out.Errors, fmt.Sprintf("第 %d 条（%s）: %v", i+1, truncateURL(p.URL), err))
+			continue
+		}
+		out.Tasks = append(out.Tasks, t)
+	}
+	return out
+}
+
+func truncateURL(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > 48 {
+		return s[:45] + "..."
+	}
+	if s == "" {
+		return "(空)"
+	}
+	return s
+}
+
+func (m *Manager) addTaskLocked(u *url.URL, p AddTaskParams) (Task, error) {
+	rawURL := p.URL
+	saveDir := p.SaveDir
+	connections := p.Connections
+	customName := p.CustomName
 	if strings.TrimSpace(saveDir) == "" {
 		saveDir = m.settings.SaveDir
 	}
@@ -113,59 +184,77 @@ func (m *Manager) AddTask(rawURL, saveDir string, connections int, customName st
 	if name == "" {
 		name = "download"
 	}
+	algo := normalizeChecksumAlgo(p.ChecksumAlgo, p.ChecksumExpected)
 	t := Task{
-		ID:          newID(),
-		URL:         rawURL,
-		FileName:    name,
-		CustomName:  custom,
-		SaveDir:     abs,
-		Status:      StatusQueued,
-		Connections: connections,
-		CreatedAt:   time.Now(),
+		ID:               newID(),
+		URL:              rawURL,
+		FileName:         name,
+		CustomName:       custom,
+		SaveDir:          abs,
+		Status:           StatusQueued,
+		Connections:      connections,
+		CreatedAt:        time.Now(),
+		ChecksumAlgo:     algo,
+		ChecksumExpected: strings.ToLower(strings.TrimSpace(p.ChecksumExpected)),
 	}
 	m.handles[t.ID] = &taskHandle{task: t, done: make(chan struct{})}
 	m.order = append(m.order, t.ID)
 	m.dispatchLocked()
-	m.changedLocked()
-	m.notify("task:created", t) // 供系统通知等上层钩子使用
+	m.persistTasksLocked()
 	return t, nil
 }
 
 func (m *Manager) PauseTask(id string) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	h, ok := m.handles[id]
 	if !ok {
+		m.mu.Unlock()
 		return fmt.Errorf("任务不存在")
 	}
+	var (
+		t           Task
+		notifySnap  []Task
+		notifyPause bool
+	)
 	switch h.task.Status {
 	case StatusQueued:
 		h.task.Status = StatusPaused
-		t := h.task
-		m.changedLocked()
-		m.notify("task:paused", t) // 排队中暂停不经 finishTask，这里直接通知
+		t = h.task
+		notifyPause = true
+		m.persistTasksLocked()
+		notifySnap = m.snapshotLocked()
 	case StatusRunning:
 		if h.cancel != nil {
 			h.cancel() // run goroutine 退出后由 finishTask 置为 Paused 并通知
 		}
+	}
+	m.mu.Unlock()
+	if notifyPause {
+		m.notify("tasks:changed", notifySnap)
+		m.notify("task:paused", t)
 	}
 	return nil
 }
 
 func (m *Manager) ResumeTask(id string) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	h, ok := m.handles[id]
 	if !ok {
+		m.mu.Unlock()
 		return fmt.Errorf("任务不存在")
 	}
 	if h.task.Status != StatusPaused && h.task.Status != StatusFailed {
-		return fmt.Errorf("当前状态不可恢复: %s", h.task.Status)
+		status := h.task.Status
+		m.mu.Unlock()
+		return fmt.Errorf("当前状态不可恢复: %s", status)
 	}
 	h.task.Status = StatusQueued
 	h.task.Error = ""
 	m.dispatchLocked()
-	m.changedLocked()
+	m.persistTasksLocked()
+	snap := m.snapshotLocked()
+	m.mu.Unlock()
+	m.notify("tasks:changed", snap)
 	return nil
 }
 
@@ -198,8 +287,10 @@ func (m *Manager) RemoveTask(id string, deleteFiles bool) error {
 			break
 		}
 	}
-	m.changedLocked()
+	m.persistTasksLocked()
+	snap := m.snapshotLocked()
 	m.mu.Unlock()
+	m.notify("tasks:changed", snap)
 
 	// 未完成的暂存数据（.downloader/<任务ID>.part）随记录一起清理；
 	// 正式文件是否删除由 deleteFiles 决定
@@ -298,7 +389,6 @@ func (m *Manager) dispatchLocked() {
 // finishTask 收尾一轮运行：更新状态、持久化、通知、调度下一个任务。
 func (m *Manager) finishTask(h *taskHandle, err error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.running--
 	h.cancel = nil
 	h.task.Speed = 0
@@ -316,26 +406,32 @@ func (m *Manager) finishTask(h *taskHandle, err error) {
 			h.task.Downloaded = h.task.TotalSize
 		}
 		h.task.FinishedAt = time.Now()
+		h.task.AvgSpeed = avgSpeedOf(h.task.Downloaded, h.task.ActiveMs)
 		_ = os.Remove(m.store.StatePath(h.task.ID))
 	case errors.Is(err, ErrPaused):
 		h.task.Status = StatusPaused
 		h.task.Error = ""
 		h.task.Downloaded = m.exactDownloadedLocked(h)
+		h.task.AvgSpeed = avgSpeedOf(h.task.Downloaded, h.task.ActiveMs)
 	default:
 		h.task.Status = StatusFailed
 		h.task.Error = err.Error()
 		h.task.Downloaded = m.exactDownloadedLocked(h)
 		h.task.FinishedAt = time.Now()
+		h.task.AvgSpeed = avgSpeedOf(h.task.Downloaded, h.task.ActiveMs)
 	}
 	t := h.task
 	m.persistTasksLocked()
-	m.notify("tasks:changed", m.snapshotLocked())
-	if h.task.Status == StatusPaused {
+	snap := m.snapshotLocked()
+	status := h.task.Status
+	m.dispatchLocked()
+	m.mu.Unlock()
+	m.notify("tasks:changed", snap)
+	if status == StatusPaused {
 		m.notify("task:paused", t)
 	} else {
 		m.notify("task:finished", t) // 供系统通知等上层钩子使用（完成/失败）
 	}
-	m.dispatchLocked()
 }
 
 // stagingDir 任务的下载暂存目录：<保存目录>/.downloader。
@@ -416,15 +512,11 @@ func (m *Manager) snapshotLocked() []Task {
 			if !h.runStartedAt.IsZero() {
 				t.ActiveMs += now.Sub(h.runStartedAt).Milliseconds()
 			}
+			t.AvgSpeed = avgSpeedOf(t.Downloaded, t.ActiveMs)
 		}
 		out = append(out, t)
 	}
 	return out
-}
-
-func (m *Manager) changedLocked() {
-	m.persistTasksLocked()
-	m.notify("tasks:changed", m.snapshotLocked())
 }
 
 func (m *Manager) persistTasksLocked() {
@@ -470,6 +562,7 @@ func (m *Manager) progressLoop() {
 				if !h.runStartedAt.IsZero() {
 					t.ActiveMs += now.Sub(h.runStartedAt).Milliseconds()
 				}
+				t.AvgSpeed = avgSpeedOf(t.Downloaded, t.ActiveMs)
 			}
 			out = append(out, t)
 		}
@@ -489,4 +582,12 @@ func (m *Manager) setBase(h *taskHandle, base int64) {
 	m.mu.Lock()
 	h.base = base
 	m.mu.Unlock()
+}
+
+// avgSpeedOf 平均速度（字节/秒）：下载量 / 活跃时长。
+func avgSpeedOf(downloaded, activeMs int64) int64 {
+	if activeMs <= 0 || downloaded <= 0 {
+		return 0
+	}
+	return downloaded * 1000 / activeMs
 }

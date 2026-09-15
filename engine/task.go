@@ -32,4 +32,18 @@ type Task struct {
 	// FinishedAt 任务结束时刻（完成或失败）；零值表示尚未结束。
 	// 总耗时 = FinishedAt - CreatedAt（未结束时用当前时间），中间暂停也计入。
 	FinishedAt time.Time `json:"finishedAt"`
+	// AvgSpeed 平均下载速度（字节/秒），按 Downloaded / ActiveMs 计算。
+	AvgSpeed int64 `json:"avgSpeed"`
+	// 校验和（可选）：用户可提供期望值；完成后写入实际摘要并标记状态。
+	ChecksumAlgo     string `json:"checksumAlgo,omitempty"`     // md5 | sha1 | sha256
+	ChecksumExpected string `json:"checksumExpected,omitempty"` // 期望摘要，十六进制
+	ChecksumActual   string `json:"checksumActual,omitempty"`   // 完成后计算得到
+	ChecksumStatus   string `json:"checksumStatus,omitempty"`   // ok | mismatch | error | skipped
 }
+
+const (
+	ChecksumOK       = "ok"
+	ChecksumMismatch = "mismatch"
+	ChecksumError    = "error"
+	ChecksumSkipped  = "skipped"
+)

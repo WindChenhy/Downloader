@@ -4,6 +4,8 @@ import {engine} from '../models';
 
 export function AddTask(arg1:string,arg2:string,arg3:number,arg4:string):Promise<engine.Task>;
 
+export function AddTasks(arg1:Array<engine.AddTaskParams>):Promise<engine.BatchAddResult>;
+
 export function ApplyCloseAction(arg1:string,arg2:boolean):Promise<void>;
 
 export function GetSettings():Promise<engine.Settings>;

@@ -22,6 +22,8 @@ type App struct {
 	// 否则托盘/弹窗选「退出」后 close 生命周期会再次进入询问逻辑，
 	// 把窗口关掉却拦下进程退出，任务管理器里留下幽灵进程。
 	quitting atomic.Bool
+	// 通知开关缓存：notify 回调可能在引擎事件路径触发，禁止再抢 Manager 锁
+	notifyCreate, notifyPause, notifyComplete, notifyFail atomic.Bool
 }
 
 func NewApp() *App { return &App{} }
@@ -63,6 +65,7 @@ func (a *App) startup(ctx context.Context) {
 		return
 	}
 	a.mgr = mgr
+	a.syncNotifyFlags()
 
 	// 系统通知
 	_ = runtime.InitializeNotifications(ctx)
@@ -88,6 +91,11 @@ func (a *App) AddTask(url string, saveDir string, connections int, customName st
 	return a.mgr.AddTask(url, saveDir, connections, customName)
 }
 
+// AddTasks 批量新建下载任务；每条含可选校验和。
+func (a *App) AddTasks(items []engine.AddTaskParams) engine.BatchAddResult {
+	return a.mgr.AddTasks(items)
+}
+
 func (a *App) PauseTask(id string) error  { return a.mgr.PauseTask(id) }
 func (a *App) ResumeTask(id string) error { return a.mgr.ResumeTask(id) }
 
@@ -98,7 +106,13 @@ func (a *App) RemoveTask(id string, deleteFiles bool) error {
 
 func (a *App) GetSettings() engine.Settings { return a.mgr.GetSettings() }
 
-func (a *App) SaveSettings(s engine.Settings) error { return a.mgr.SaveSettings(s) }
+func (a *App) SaveSettings(s engine.Settings) error {
+	if err := a.mgr.SaveSettings(s); err != nil {
+		return err
+	}
+	a.syncNotifyFlags()
+	return nil
+}
 
 // ShowWindow 显示并激活主窗口（托盘菜单使用）。
 func (a *App) ShowWindow() {

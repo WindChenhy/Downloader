@@ -107,8 +107,11 @@ function TaskRow({
           {(task.status === 'completed' || task.status === 'failed') && (
             <span title="纯下载耗时 / 总耗时（含暂停，已冻结）">
               用时 {formatDuration(task.activeMs || 0)} · 总 {formatDuration(totalElapsedMs(task))}
+              {task.avgSpeed > 0 && ` · 均 ${formatSpeed(task.avgSpeed)}`}
             </span>
           )}
+          {task.checksumStatus === 'ok' && <span className="chip completed">校验通过</span>}
+          {task.checksumStatus === 'mismatch' && <span className="chip failed">校验失败</span>}
           {(localErr || (task.status === 'failed' && task.error)) && (
             <span className="task-error" title={localErr || task.error}>
               {localErr || task.error}

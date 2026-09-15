@@ -104,6 +104,11 @@ type Settings struct {
 	CloseAction     string        `json:"closeAction"`   // ask | exit | minimize
 	DirCategories   []DirCategory `json:"dirCategories"` // 下载目录分类
 	AutoExtract     bool          `json:"autoExtract"`   // 下载完成后自动解压压缩包
+	// 系统通知：完成/失败默认开，创建/暂停默认关，均可配置
+	NotifyOnCreate   bool `json:"notifyOnCreate"`
+	NotifyOnPause    bool `json:"notifyOnPause"`
+	NotifyOnComplete bool `json:"notifyOnComplete"`
+	NotifyOnFail     bool `json:"notifyOnFail"`
 }
 
 func defaultSaveDir() string {
@@ -128,17 +133,21 @@ func defaultDirCategories() []DirCategory {
 // defaultSettings 首次运行（无设置文件）时的默认值。
 func defaultSettings() Settings {
 	return Settings{
-		SaveDir:         defaultSaveDir(),
-		Connections:     DefaultConnections,
-		ConcurrentTasks: DefaultConcurrentTasks,
-		ProxyMode:       ProxyNone,
-		MirrorTemplate:  DefaultMirrorTemplate,
-		ClipboardWatch:  true,
-		APIEnabled:      true,
-		APIPort:         DefaultAPIPort,
-		CloseAction:     CloseActionAsk,
-		DirCategories:   defaultDirCategories(),
-		AutoExtract:     false,
+		SaveDir:          defaultSaveDir(),
+		Connections:      DefaultConnections,
+		ConcurrentTasks:  DefaultConcurrentTasks,
+		ProxyMode:        ProxyNone,
+		MirrorTemplate:   DefaultMirrorTemplate,
+		ClipboardWatch:   true,
+		APIEnabled:       true,
+		APIPort:          DefaultAPIPort,
+		CloseAction:      CloseActionAsk,
+		DirCategories:    defaultDirCategories(),
+		AutoExtract:      false,
+		NotifyOnCreate:   false,
+		NotifyOnPause:    false,
+		NotifyOnComplete: true,
+		NotifyOnFail:     true,
 	}
 }
 
@@ -234,6 +243,12 @@ func (s *Store) LoadSettings() (Settings, error) {
 		}
 		if _, ok := keys["dirCategories"]; !ok {
 			st.DirCategories = defaultDirCategories()
+		}
+		if _, ok := keys["notifyOnComplete"]; !ok {
+			st.NotifyOnComplete = true
+		}
+		if _, ok := keys["notifyOnFail"]; !ok {
+			st.NotifyOnFail = true
 		}
 	}
 	st.normalize()

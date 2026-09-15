@@ -68,6 +68,21 @@ export function activeElapsedMs(task: Task): number {
   return Math.max(0, task.activeMs || 0);
 }
 
+/** parseDownloadUrls 从粘贴文本提取 http(s) 链接（支持多行/空白分隔/引号）。 */
+export function parseDownloadUrls(text: string): string[] {
+  return text
+    .split(/[\r\n\s]+/)
+    .map((s) => s.trim().replace(/^["']|["']$/g, ''))
+    .filter((s) => /^https?:\/\//i.test(s));
+}
+
+export const checksumStatusMeta: Record<string, {label: string; cls: string}> = {
+  ok: {label: '校验通过', cls: 'completed'},
+  mismatch: {label: '校验失败', cls: 'failed'},
+  error: {label: '校验错误', cls: 'failed'},
+  skipped: {label: '已计算', cls: 'paused'},
+};
+
 export function percent(task: {downloaded: number; totalSize: number; status: Status}): number {
   if (task.status === 'completed') return 100;
   if (task.totalSize <= 0) return 0;
