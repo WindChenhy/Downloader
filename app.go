@@ -28,6 +28,7 @@ type App struct {
 
 func NewApp() *App { return &App{} }
 
+// startup Wails 启动回调：初始化引擎、通知、REST API、剪贴板与托盘。
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	dataDir, err := os.UserConfigDir()
@@ -101,13 +102,20 @@ func (a *App) AddTasks(items []engine.AddTaskParams) engine.BatchAddResult {
 func (a *App) PauseTask(id string) error  { return a.mgr.PauseTask(id) }
 func (a *App) ResumeTask(id string) error { return a.mgr.ResumeTask(id) }
 
+// SetTaskPriority 设置任务优先级（0 低 / 1 普通 / 2 高）。
 func (a *App) SetTaskPriority(id string, priority int) error {
 	return a.mgr.SetTaskPriority(id, priority)
 }
+
+// MoveTask 列表内上下移动（-1 上移 / +1 下移）。
 func (a *App) MoveTask(id string, delta int) error { return a.mgr.MoveTask(id, delta) }
+
+// SetTaskSpeedLimit 设置每任务限速（字节/秒，0 跟随全局）。
 func (a *App) SetTaskSpeedLimit(id string, limit int64) error {
 	return a.mgr.SetTaskSpeedLimit(id, limit)
 }
+
+// SetTaskStartAt 设置定时开始时间（RFC3339，空串表示立即）。
 func (a *App) SetTaskStartAt(id string, startAt string) error {
 	return a.mgr.SetTaskStartAt(id, startAt)
 }
@@ -162,8 +170,10 @@ func (a *App) RemoveTask(id string, deleteFiles bool) error {
 	return a.mgr.RemoveTask(id, deleteFiles)
 }
 
+// GetSettings 返回全局设置。
 func (a *App) GetSettings() engine.Settings { return a.mgr.GetSettings() }
 
+// SaveSettings 保存设置并同步通知开关缓存。
 func (a *App) SaveSettings(s engine.Settings) error {
 	if err := a.mgr.SaveSettings(s); err != nil {
 		return err

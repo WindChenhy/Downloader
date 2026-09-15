@@ -2,7 +2,9 @@ package engine
 
 import "time"
 
-// Status 任务状态机：queued -> running -> completed / failed / paused
+// Status 任务状态机：
+// queued → running → completed | failed | paused
+// paused | failed → queued（恢复）；定时任务在 StartAt 前保持 queued。
 type Status string
 
 const (
@@ -69,9 +71,3 @@ const (
 	ChecksumError    = "error"
 	ChecksumSkipped  = "skipped"
 )
-
-// IsScheduled 报告任务是否处于「定时等待」。
-func (t Task) IsScheduled(now time.Time) bool {
-	return !t.StartAt.IsZero() && t.StartAt.After(now) &&
-		(t.Status == StatusQueued || t.Status == StatusPaused)
-}

@@ -75,9 +75,9 @@ func NewManager(dataDir string, notify func(name string, data ...interface{})) (
 	m.persistTasksLocked()
 	m.mu.Lock()
 	m.cleanupOrphanStagingLocked()
+	m.dispatchLocked()
 	m.mu.Unlock()
 	go m.progressLoop()
-	m.dispatchLocked()
 	return m, nil
 }
 
@@ -89,7 +89,7 @@ type AddTaskParams struct {
 	CustomName       string `json:"customName"`
 	ChecksumAlgo     string `json:"checksumAlgo"`
 	ChecksumExpected string `json:"checksumExpected"`
-	Priority         int    `json:"priority"`   // 0/1/2；省略按 1
+	Priority         int    `json:"priority"`   // 0 低 / 1 普通 / 2 高；非法值回落为普通
 	StartAt          string `json:"startAt"`    // RFC3339；空 = 立即
 	SpeedLimit       int64  `json:"speedLimit"` // 每任务限速，0 跟随全局
 }
@@ -100,6 +100,7 @@ type BatchAddResult struct {
 	Errors []string `json:"errors"`
 }
 
+// AddTask 新建单个下载任务（不含校验和/优先级等扩展字段）。
 func (m *Manager) AddTask(rawURL, saveDir string, connections int, customName string) (Task, error) {
 	return m.AddTaskWithChecksum(AddTaskParams{
 		URL:         rawURL,
@@ -109,6 +110,7 @@ func (m *Manager) AddTask(rawURL, saveDir string, connections int, customName st
 	})
 }
 
+// AddTaskWithChecksum 按完整参数新建任务；事件在锁外发出。
 func (m *Manager) AddTaskWithChecksum(p AddTaskParams) (Task, error) {
 	rawURL := p.URL
 	u, err := validateURL(rawURL)
@@ -203,18 +205,14 @@ func (m *Manager) addTaskLocked(u *url.URL, p AddTaskParams) (Task, error) {
 			startAt = ts
 		}
 	}
-	status := StatusQueued
-	if !startAt.IsZero() && startAt.After(time.Now()) {
-		// 仍标为 queued：由调度器到点后真正 dispatch；UI 可按 StartAt 显示「定时」
-		status = StatusQueued
-	}
+	// 定时未到点仍为 queued：dispatchLocked 会按 StartAt 跳过
 	t := Task{
 		ID:               newID(),
 		URL:              rawURL,
 		FileName:         name,
 		CustomName:       custom,
 		SaveDir:          abs,
-		Status:           status,
+		Status:           StatusQueued,
 		Connections:      connections,
 		CreatedAt:        time.Now(),
 		ChecksumAlgo:     algo,
@@ -231,6 +229,7 @@ func (m *Manager) addTaskLocked(u *url.URL, p AddTaskParams) (Task, error) {
 	return t, nil
 }
 
+// PauseTask 暂停任务。排队中立即改状态；运行中则取消本轮下载。
 func (m *Manager) PauseTask(id string) error {
 	m.mu.Lock()
 	h, ok := m.handles[id]
@@ -263,6 +262,7 @@ func (m *Manager) PauseTask(id string) error {
 	return nil
 }
 
+// ResumeTask 恢复已暂停/失败的任务（重新入队）。
 func (m *Manager) ResumeTask(id string) error {
 	m.mu.Lock()
 	h, ok := m.handles[id]
@@ -424,18 +424,21 @@ func (m *Manager) RemoveTask(id string, deleteFiles bool) error {
 	return nil
 }
 
+// GetTasks 返回全部任务快照（含运行中实时进度与活跃耗时）。
 func (m *Manager) GetTasks() []Task {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.snapshotLocked()
 }
 
+// GetSettings 返回当前全局设置快照。
 func (m *Manager) GetSettings() Settings {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.settings
 }
 
+// SaveSettings 持久化并应用设置（代理/UA/全局限速即时生效）。
 func (m *Manager) SaveSettings(s Settings) error {
 	s.normalize()
 	if err := m.store.SaveSettings(s); err != nil {

@@ -35,6 +35,7 @@ func normalizeChecksumAlgo(algo, expected string) string {
 	}
 }
 
+// newHash 按算法名构造哈希实例。
 func newHash(algo string) (hash.Hash, error) {
 	switch algo {
 	case "md5":

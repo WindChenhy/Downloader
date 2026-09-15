@@ -100,23 +100,27 @@ Windows 构建注意：若上级目录存在引用缺失模块的 `go.work`，�
 
 ```
 main.go                  Wails 应用入口：窗口、单实例锁、OnShutdown 强制收尾
-app.go                   前端绑定（任务/设置/打开目录/关闭行为 ApplyCloseAction）
+app.go                   前端绑定（任务/设置/打开目录/关闭行为/导入导出）
 app_tray.go              系统托盘（fyne.io/systray）；退出时 systray.Quit + 进程收尾
-app_notify.go            系统通知（按设置：创建/暂停/完成/失败）
+app_notify.go            系统通知（按设置：创建/暂停/完成/失败；原子缓存开关）
 app_clipboard.go         剪贴板监听
 engine/                  下载引擎（与 UI 解耦，可独立复用，仅标准库依赖）
-  manager.go             任务队列、并发调度、事件推送、设置应用
+  manager.go             任务队列、优先级调度、定时唤醒、事件推送、设置应用
   download.go            分段下载、字节级续传、重试、落盘改名
+  importexport.go        任务列表 JSON 导出/导入
+  aftercomplete.go       全部完成后的系统动作（开目录/关机/睡眠/退出信号）
+  checksum.go            MD5/SHA1/SHA256 摘要计算与校验
   api.go                 本地 REST API
-  ratelimit.go           全局限速器（令牌匀速累积，暂停感知）
+  ratelimit.go           全局限速 + 每任务限速（令牌匀速累积）
   mirror.go              GitHub 镜像 URL 改写
   probe.go               URL 探测（大小/Range 支持/文件名推断）
   client.go              HTTP 客户端构建（代理/UA/超时策略）
   chunk.go               Range 分片计算
   sidecar.go             续传状态模型（分段位图 + 段内已收字节）
-  store.go               设置与任务持久化（含 closeAction 等；原子写 JSON，Windows 重试）
+  store.go               设置与任务持久化（原子写 JSON，Windows 重试）
 frontend/src             React + TypeScript 界面
   components/            任务列表、新建对话框、设置页、删除/关闭确认对话框、SVG 图标
+  lib/format.ts          字节/速度/耗时格式化、URL 解析与序列号展开
 ```
 
 设置中的 `closeAction` 取值：`ask` | `exit` | `minimize`（默认 `ask`）。主动退出前会置 `quitting` 标志，避免 `OnBeforeClose` 在「每次询问」下二次拦截导致进程残留。
