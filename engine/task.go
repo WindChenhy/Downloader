@@ -27,4 +27,9 @@ type Task struct {
 	Connections int       `json:"connections"`
 	Error       string    `json:"error,omitempty"`
 	CreatedAt   time.Time `json:"createdAt"`
+	// ActiveMs 纯下载耗时（毫秒）：仅累计 running 阶段，暂停/排队不计。
+	ActiveMs int64 `json:"activeMs"`
+	// FinishedAt 任务结束时刻（完成或失败）；零值表示尚未结束。
+	// 总耗时 = FinishedAt - CreatedAt（未结束时用当前时间），中间暂停也计入。
+	FinishedAt time.Time `json:"finishedAt"`
 }

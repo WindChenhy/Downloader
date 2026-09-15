@@ -12,6 +12,10 @@ export interface Task {
   connections: number;
   error?: string;
   createdAt: string;
+  /** 纯下载耗时（毫秒），暂停不计 */
+  activeMs: number;
+  /** 结束时刻；零值/空表示尚未完成或失败 */
+  finishedAt?: string;
 }
 
 export type ProxyMode = 'none' | 'system' | 'custom';
