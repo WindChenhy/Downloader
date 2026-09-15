@@ -5,8 +5,10 @@ import {ClipboardSetText} from '../../wailsjs/runtime/runtime';
 import type {Task} from '../types';
 import {
   activeElapsedMs,
+  checksumStatusMeta,
   formatBytes,
   formatDuration,
+  formatSpeed,
   percent,
   statusMeta,
   totalElapsedMs,
@@ -110,6 +112,34 @@ export default function TaskDetailDialog({task, onClose}: Props) {
           value={formatDuration(totalElapsedMs(task, now))}
           // 创建到结束（含暂停）；已完成/失败后不再随时间增长
         />
+        <DetailRow
+          label="平均速度"
+          value={formatSpeed(task.avgSpeed || 0) || '—'}
+        />
+        {(task.checksumStatus || task.checksumActual || task.checksumExpected) && (
+          <DetailRow
+            label="校验和"
+            value={
+              [
+                task.checksumAlgo ? task.checksumAlgo.toUpperCase() : '',
+                task.checksumActual ? `实际 ${task.checksumActual.slice(0, 16)}…` : '',
+                task.checksumStatus ? (checksumStatusMeta[task.checksumStatus]?.label ?? task.checksumStatus) : '',
+              ]
+                .filter(Boolean)
+                .join(' · ') || '—'
+            }
+            mono
+          />
+        )}
+        {task.checksumExpected && (
+          <DetailRow
+            label="期望校验值"
+            value={task.checksumExpected}
+            mono
+            onCopy={() => copy(task.checksumExpected ?? '', 'checksum')}
+            copied={copied === 'checksum'}
+          />
+        )}
         <DetailRow
           label="创建时间"
           value={new Date(task.createdAt).toLocaleString('zh-CN', {hour12: false})}

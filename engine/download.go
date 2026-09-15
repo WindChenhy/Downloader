@@ -186,9 +186,27 @@ func (r *taskRunner) run(ctx context.Context) error {
 	if err := r.finishFile(); err != nil {
 		return err
 	}
+	final := filepath.Join(r.task.SaveDir, r.task.FileName)
+	// 可选校验和：完成后计算摘要；提供了期望值则比对
+	if r.task.ChecksumAlgo != "" || r.task.ChecksumExpected != "" {
+		actual, status := verifyChecksum(final, r.task.ChecksumAlgo, r.task.ChecksumExpected)
+		r.task.ChecksumActual = actual
+		r.task.ChecksumStatus = status
+		algo := normalizeChecksumAlgo(r.task.ChecksumAlgo, r.task.ChecksumExpected)
+		r.m.updateTask(r.h, func(t *Task) {
+			t.ChecksumActual = actual
+			t.ChecksumStatus = status
+			t.ChecksumAlgo = algo
+		})
+		if status == ChecksumMismatch {
+			return fmt.Errorf("校验和不匹配：期望 %s，实际 %s", r.task.ChecksumExpected, actual)
+		}
+		if status == ChecksumError {
+			return fmt.Errorf("校验和计算失败")
+		}
+	}
 	// 下载完成后按设置自动解压压缩包（失败不改变任务完成状态）
 	if r.settings.AutoExtract && r.task.FileName != "" {
-		final := filepath.Join(r.task.SaveDir, r.task.FileName)
 		if isArchivePath(final) {
 			_ = extractArchive(final)
 		}
