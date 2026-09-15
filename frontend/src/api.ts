@@ -13,6 +13,13 @@ export const api = {
   resumeTask: (id: string): Promise<void> => App.ResumeTask(id),
   removeTask: (id: string, deleteFiles: boolean): Promise<void> => App.RemoveTask(id, deleteFiles),
   openFolder: (saveDir: string, fileName: string): Promise<void> => App.OpenFolder(saveDir, fileName),
+  setTaskPriority: (id: string, priority: number): Promise<void> => App.SetTaskPriority(id, priority),
+  moveTask: (id: string, delta: number): Promise<void> => App.MoveTask(id, delta),
+  setTaskSpeedLimit: (id: string, limit: number): Promise<void> => App.SetTaskSpeedLimit(id, limit),
+  setTaskStartAt: (id: string, startAt: string): Promise<void> => App.SetTaskStartAt(id, startAt),
+  exportTasksJson: (): Promise<string> => App.ExportTasksJSON() as unknown as Promise<string>,
+  importTasksJson: (data: string): Promise<BatchAddResult> =>
+    App.ImportTasksJSON(data) as unknown as Promise<BatchAddResult>,
   getSettings: (): Promise<Settings> => App.GetSettings() as unknown as Promise<Settings>,
   saveSettings: (s: Settings): Promise<void> =>
     App.SaveSettings(s as unknown as Parameters<typeof App.SaveSettings>[0]),

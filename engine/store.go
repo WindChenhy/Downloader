@@ -109,6 +109,8 @@ type Settings struct {
 	NotifyOnPause    bool `json:"notifyOnPause"`
 	NotifyOnComplete bool `json:"notifyOnComplete"`
 	NotifyOnFail     bool `json:"notifyOnFail"`
+	// AfterComplete 全部任务结束后的动作
+	AfterComplete string `json:"afterComplete"`
 }
 
 func defaultSaveDir() string {
@@ -148,6 +150,7 @@ func defaultSettings() Settings {
 		NotifyOnPause:    false,
 		NotifyOnComplete: true,
 		NotifyOnFail:     true,
+		AfterComplete:    AfterCompleteNone,
 	}
 }
 
@@ -193,6 +196,11 @@ func (s *Settings) normalize() {
 	case CloseActionExit, CloseActionMinimize:
 	default:
 		s.CloseAction = CloseActionAsk
+	}
+	switch s.AfterComplete {
+	case AfterCompleteOpenDir, AfterCompleteShutdown, AfterCompleteSleep, AfterCompleteExitApp:
+	default:
+		s.AfterComplete = AfterCompleteNone
 	}
 	// 目录分类：去掉空白项，名称去重（同名后者覆盖路径）
 	if s.DirCategories == nil {

@@ -18,6 +18,12 @@ export interface Task {
   finishedAt?: string;
   /** 平均下载速度（字节/秒），按活跃时长 */
   avgSpeed: number;
+  /** 优先级 0低/1普通/2高 */
+  priority: number;
+  /** 定时开始；零值/空表示立即 */
+  startAt?: string;
+  /** 每任务限速（字节/秒），0 跟随全局 */
+  speedLimit: number;
   /** 校验和（可选） */
   checksumAlgo?: string;
   checksumExpected?: string;
@@ -32,6 +38,9 @@ export interface AddTaskParams {
   customName?: string;
   checksumAlgo?: string;
   checksumExpected?: string;
+  priority?: number;
+  startAt?: string;
+  speedLimit?: number;
 }
 
 export interface BatchAddResult {
@@ -41,6 +50,7 @@ export interface BatchAddResult {
 
 export type ProxyMode = 'none' | 'system' | 'custom';
 export type CloseAction = 'ask' | 'exit' | 'minimize';
+export type AfterCompleteAction = 'none' | 'open_dir' | 'shutdown' | 'sleep' | 'exit_app';
 
 export interface DirCategory {
   name: string;
@@ -69,6 +79,8 @@ export interface Settings {
   notifyOnPause: boolean;
   notifyOnComplete: boolean;
   notifyOnFail: boolean;
+  /** 全部下载结束后的动作 */
+  afterComplete: AfterCompleteAction;
 }
 
 export type ThemeMode = 'light' | 'dark' | 'system';
@@ -83,3 +95,18 @@ export const ACCENTS: {key: string; label: string; color: string}[] = [
   {key: 'pink', label: '粉', color: '#ec4899'},
   {key: 'slate', label: '灰', color: '#64748b'},
 ];
+
+export const PRIORITY_META: {key: number; label: string}[] = [
+  {key: 0, label: '低'},
+  {key: 1, label: '普通'},
+  {key: 2, label: '高'},
+];
+
+export function isScheduled(task: Task, now = Date.now()): boolean {
+  if (!task.startAt) return false;
+  const t = Date.parse(task.startAt);
+  if (Number.isNaN(t) || t <= now) return false;
+  // Go 零值
+  if (task.startAt.startsWith('0001-01-01')) return false;
+  return task.status === 'queued' || task.status === 'paused';
+}

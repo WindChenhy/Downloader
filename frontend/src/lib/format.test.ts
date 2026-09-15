@@ -1,6 +1,12 @@
 import {describe, expect, it} from 'vitest';
 
-import {formatDuration, parseDownloadUrls, totalElapsedMs} from './format';
+import {
+  expandSequenceUrls,
+  formatDuration,
+  parseAndExpandUrls,
+  parseDownloadUrls,
+  totalElapsedMs,
+} from './format';
 import type {Task} from '../types';
 
 function baseTask(patch: Partial<Task> = {}): Task {
@@ -17,6 +23,8 @@ function baseTask(patch: Partial<Task> = {}): Task {
     createdAt: '2026-01-01T00:00:00.000Z',
     activeMs: 0,
     avgSpeed: 0,
+    priority: 1,
+    speedLimit: 0,
     ...patch,
   };
 }
@@ -40,6 +48,35 @@ describe('parseDownloadUrls', () => {
 
   it('空白分隔也算多条', () => {
     expect(parseDownloadUrls('https://a.com/1 https://a.com/2')).toHaveLength(2);
+  });
+});
+
+describe('expandSequenceUrls', () => {
+  it('展开 {1..3}', () => {
+    expect(expandSequenceUrls('https://x.com/f_{1..3}.zip')).toEqual([
+      'https://x.com/f_1.zip',
+      'https://x.com/f_2.zip',
+      'https://x.com/f_3.zip',
+    ]);
+  });
+
+  it('支持步长', () => {
+    expect(expandSequenceUrls('https://x.com/f_{1..5:2}.zip')).toEqual([
+      'https://x.com/f_1.zip',
+      'https://x.com/f_3.zip',
+      'https://x.com/f_5.zip',
+    ]);
+  });
+
+  it('无序列原样返回', () => {
+    expect(expandSequenceUrls('https://x.com/a.zip')).toEqual(['https://x.com/a.zip']);
+  });
+});
+
+describe('parseAndExpandUrls', () => {
+  it('序列展开后过滤合法链接', () => {
+    const urls = parseAndExpandUrls('https://x.com/{1..2}.zip\nnope');
+    expect(urls).toEqual(['https://x.com/1.zip', 'https://x.com/2.zip']);
   });
 });
 

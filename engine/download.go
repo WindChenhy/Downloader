@@ -59,6 +59,7 @@ type taskRunner struct {
 	statePath    string
 	partFile     *os.File
 	resuming     bool
+	taskLimiter  *rateLimiter // 每任务限速；nil 表示不限
 }
 
 func (r *taskRunner) run(ctx context.Context) error {
@@ -70,6 +71,9 @@ func (r *taskRunner) run(ctx context.Context) error {
 	}
 	r.extraHeaders = parseExtraHeaders(r.settings.ExtraHeaders)
 	r.fetchURL = resolveFetchURL(r.settings, r.task.URL)
+	if r.task.SpeedLimit > 0 {
+		r.taskLimiter = newRateLimiter(r.task.SpeedLimit)
+	}
 
 	probe, err := probeURL(ctx, r.m.httpClient(), r.fetchURL, r.userAgent, r.extraHeaders)
 	if err != nil {
@@ -408,7 +412,7 @@ func (r *taskRunner) fetchRange(ctx context.Context, idx int, live *atomic.Int64
 		r.addChunkProgress(idx, n)
 		live.Add(n) // 每个写入块实时计入进度，而不是等整段完成
 	}}
-	n, err := io.Copy(w, &limitedReader{r: resp.Body, ctx: ctx, l: r.m.limiter})
+	n, err := io.Copy(w, &limitedReader{r: resp.Body, ctx: ctx, l: r.m.limiter, extra: r.taskLimiter})
 	if err != nil {
 		return err
 	}
@@ -479,7 +483,7 @@ func (r *taskRunner) fetchStream(ctx context.Context, offset int64, live *atomic
 		return fmt.Errorf("服务器返回状态码 %d，无法续传", resp.StatusCode)
 	}
 	w := &offsetWriter{f: r.partFile, off: offset, onWrite: func(n int64) { live.Add(n) }}
-	n, err := io.Copy(w, &limitedReader{r: resp.Body, ctx: ctx, l: r.m.limiter})
+	n, err := io.Copy(w, &limitedReader{r: resp.Body, ctx: ctx, l: r.m.limiter, extra: r.taskLimiter})
 	if err != nil {
 		return err
 	}

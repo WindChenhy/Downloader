@@ -461,6 +461,7 @@ body {
   align-items: center;
   justify-content: center;
   z-index: 10;
+  padding: 20px;
 }
 
 .dialog,
@@ -470,7 +471,45 @@ body {
   border-radius: 14px;
   padding: 24px;
   width: 480px;
-  max-width: calc(100vw - 48px);
+  max-width: calc(100vw - 40px);
+}
+
+/* 弹窗整体不超出窗口：标题固定、内容区可滚、底部操作固定 */
+.dialog {
+  max-height: calc(100vh - 40px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.dialog > h2 {
+  flex-shrink: 0;
+}
+
+/* 内容区（红框区域）：限高，超出滚动；窗口变高时最多撑到可用高度 */
+.dialog-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  max-height: min(72vh, 560px);
+  padding-right: 4px;
+  margin-right: -4px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.dialog-body::-webkit-scrollbar {
+  width: 8px;
+}
+
+.dialog-body::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+.dialog-body::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .settings {
@@ -529,6 +568,7 @@ body {
   justify-content: flex-end;
   gap: 10px;
   margin-top: 18px;
+  flex-shrink: 0;
 }
 
 .dialog-error {
@@ -538,7 +578,7 @@ body {
 }
 
 .dialog-compact {
-  width: 420px;
+  width: min(520px, calc(100vw - 40px));
 }
 
 .delete-target {

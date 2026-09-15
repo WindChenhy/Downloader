@@ -39,6 +39,8 @@ type Manager struct {
 	order    []string // 按创建顺序，保持列表稳定
 	running  int
 	limiter  *rateLimiter
+	// queueIdleFired 队列清空后只触发一次「全部完成」动作，新任务会重置
+	queueIdleFired bool
 }
 
 // NewManager 创建管理器并加载磁盘上的任务与设置。
@@ -87,6 +89,9 @@ type AddTaskParams struct {
 	CustomName       string `json:"customName"`
 	ChecksumAlgo     string `json:"checksumAlgo"`
 	ChecksumExpected string `json:"checksumExpected"`
+	Priority         int    `json:"priority"`   // 0/1/2；省略按 1
+	StartAt          string `json:"startAt"`    // RFC3339；空 = 立即
+	SpeedLimit       int64  `json:"speedLimit"` // 每任务限速，0 跟随全局
 }
 
 // BatchAddResult 批量新建结果：成功任务列表 + 失败说明（与输入顺序对应可不保证）。
@@ -185,20 +190,42 @@ func (m *Manager) addTaskLocked(u *url.URL, p AddTaskParams) (Task, error) {
 		name = "download"
 	}
 	algo := normalizeChecksumAlgo(p.ChecksumAlgo, p.ChecksumExpected)
+	prio := p.Priority
+	if prio < PriorityLow {
+		prio = PriorityNormal
+	}
+	if prio > PriorityHigh {
+		prio = PriorityHigh
+	}
+	var startAt time.Time
+	if s := strings.TrimSpace(p.StartAt); s != "" {
+		if ts, err := time.Parse(time.RFC3339, s); err == nil {
+			startAt = ts
+		}
+	}
+	status := StatusQueued
+	if !startAt.IsZero() && startAt.After(time.Now()) {
+		// 仍标为 queued：由调度器到点后真正 dispatch；UI 可按 StartAt 显示「定时」
+		status = StatusQueued
+	}
 	t := Task{
 		ID:               newID(),
 		URL:              rawURL,
 		FileName:         name,
 		CustomName:       custom,
 		SaveDir:          abs,
-		Status:           StatusQueued,
+		Status:           status,
 		Connections:      connections,
 		CreatedAt:        time.Now(),
 		ChecksumAlgo:     algo,
 		ChecksumExpected: strings.ToLower(strings.TrimSpace(p.ChecksumExpected)),
+		Priority:         prio,
+		StartAt:          startAt,
+		SpeedLimit:       p.SpeedLimit,
 	}
 	m.handles[t.ID] = &taskHandle{task: t, done: make(chan struct{})}
 	m.order = append(m.order, t.ID)
+	m.queueIdleFired = false
 	m.dispatchLocked()
 	m.persistTasksLocked()
 	return t, nil
@@ -250,6 +277,100 @@ func (m *Manager) ResumeTask(id string) error {
 	}
 	h.task.Status = StatusQueued
 	h.task.Error = ""
+	m.dispatchLocked()
+	m.persistTasksLocked()
+	snap := m.snapshotLocked()
+	m.mu.Unlock()
+	m.notify("tasks:changed", snap)
+	return nil
+}
+
+// SetTaskPriority 设置任务优先级（0/1/2）。
+func (m *Manager) SetTaskPriority(id string, priority int) error {
+	if priority < PriorityLow || priority > PriorityHigh {
+		return fmt.Errorf("无效优先级: %d", priority)
+	}
+	m.mu.Lock()
+	h, ok := m.handles[id]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("任务不存在")
+	}
+	h.task.Priority = priority
+	m.dispatchLocked()
+	m.persistTasksLocked()
+	snap := m.snapshotLocked()
+	m.mu.Unlock()
+	m.notify("tasks:changed", snap)
+	return nil
+}
+
+// MoveTask 在列表中上下移动任务（-1 上移 / +1 下移）。
+func (m *Manager) MoveTask(id string, delta int) error {
+	if delta != -1 && delta != 1 {
+		return fmt.Errorf("delta 只能是 -1 或 1")
+	}
+	m.mu.Lock()
+	idx := -1
+	for i, oid := range m.order {
+		if oid == id {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		m.mu.Unlock()
+		return fmt.Errorf("任务不存在")
+	}
+	j := idx + delta
+	if j < 0 || j >= len(m.order) {
+		m.mu.Unlock()
+		return nil // 已在边界，静默成功
+	}
+	m.order[idx], m.order[j] = m.order[j], m.order[idx]
+	m.persistTasksLocked()
+	snap := m.snapshotLocked()
+	m.mu.Unlock()
+	m.notify("tasks:changed", snap)
+	return nil
+}
+
+// SetTaskSpeedLimit 设置每任务限速（字节/秒，0 跟随全局）。
+func (m *Manager) SetTaskSpeedLimit(id string, limit int64) error {
+	if limit < 0 {
+		limit = 0
+	}
+	m.mu.Lock()
+	h, ok := m.handles[id]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("任务不存在")
+	}
+	h.task.SpeedLimit = limit
+	m.persistTasksLocked()
+	snap := m.snapshotLocked()
+	m.mu.Unlock()
+	m.notify("tasks:changed", snap)
+	return nil
+}
+
+// SetTaskStartAt 设置定时开始（RFC3339；空字符串表示立即）。
+func (m *Manager) SetTaskStartAt(id string, startAtRFC3339 string) error {
+	var ts time.Time
+	if s := strings.TrimSpace(startAtRFC3339); s != "" {
+		parsed, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			return fmt.Errorf("无效时间: %v", err)
+		}
+		ts = parsed
+	}
+	m.mu.Lock()
+	h, ok := m.handles[id]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("任务不存在")
+	}
+	h.task.StartAt = ts
 	m.dispatchLocked()
 	m.persistTasksLocked()
 	snap := m.snapshotLocked()
@@ -348,13 +469,23 @@ func (m *Manager) HasTaskWithURL(rawURL string) bool {
 }
 
 // dispatchLocked 启动排队任务直到占满并发额度。调用方须持有 mu。
+// 出队顺序：优先级高者先，同级按创建顺序；未到 StartAt 的定时任务跳过。
 func (m *Manager) dispatchLocked() {
+	now := time.Now()
 	for m.running < m.settings.ConcurrentTasks {
 		var nextID string
+		bestPrio := -1
 		for _, id := range m.order {
-			if m.handles[id].task.Status == StatusQueued {
+			h := m.handles[id]
+			if h.task.Status != StatusQueued {
+				continue
+			}
+			if !h.task.StartAt.IsZero() && h.task.StartAt.After(now) {
+				continue // 定时未到点
+			}
+			if h.task.Priority > bestPrio {
+				bestPrio = h.task.Priority
 				nextID = id
-				break
 			}
 		}
 		if nextID == "" {
@@ -424,6 +555,7 @@ func (m *Manager) finishTask(h *taskHandle, err error) {
 	m.persistTasksLocked()
 	snap := m.snapshotLocked()
 	status := h.task.Status
+	idle := m.queueIdleLocked()
 	m.dispatchLocked()
 	m.mu.Unlock()
 	m.notify("tasks:changed", snap)
@@ -432,6 +564,27 @@ func (m *Manager) finishTask(h *taskHandle, err error) {
 	} else {
 		m.notify("task:finished", t) // 供系统通知等上层钩子使用（完成/失败）
 	}
+	if idle {
+		m.notify("queue:idle", t)
+	}
+}
+
+// queueIdleLocked 检测本轮结束后是否已无排队/运行任务，并保证只通知一次。
+// 调用方须持有 mu。
+func (m *Manager) queueIdleLocked() bool {
+	if m.running > 0 {
+		return false
+	}
+	for _, h := range m.handles {
+		if h.task.Status == StatusRunning || h.task.Status == StatusQueued {
+			return false // 仍有人在跑，或还有排队/定时待启动
+		}
+	}
+	if m.queueIdleFired || len(m.handles) == 0 {
+		return false
+	}
+	m.queueIdleFired = true
+	return true
 }
 
 // stagingDir 任务的下载暂存目录：<保存目录>/.downloader。
@@ -529,12 +682,13 @@ func (m *Manager) persistTasksLocked() {
 	}
 }
 
-// progressLoop 每 500ms 推送一次运行中任务的进度与速度。
+// progressLoop 每 500ms 推送一次运行中任务的进度与速度，并唤醒到点的定时任务。
 func (m *Manager) progressLoop() {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	for range ticker.C {
 		m.mu.Lock()
+		m.dispatchLocked() // 定时任务到点后可启动
 		if m.running == 0 {
 			m.mu.Unlock()
 			continue

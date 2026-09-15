@@ -72,86 +72,102 @@ export default function TaskDetailDialog({task, onClose}: Props) {
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="dialog dialog-compact">
         <h2>任务详情</h2>
-        <DetailRow
-          label="文件名"
-          value={task.fileName}
-          onCopy={() => copy(task.fileName, 'name')}
-          copied={copied === 'name'}
-        />
-        <DetailRow
-          label="链接"
-          value={task.url}
-          mono
-          onCopy={() => copy(task.url, 'url')}
-          copied={copied === 'url'}
-        />
-        <DetailRow
-          label="下载路径"
-          value={fullPath}
-          mono
-          onCopy={() => copy(fullPath, 'path')}
-          copied={copied === 'path'}
-        />
-        <DetailRow
-          label="大小"
-          value={
-            task.totalSize > 0
-              ? `${formatBytes(task.downloaded)} / ${formatBytes(task.totalSize)}（${percent(task)}%）`
-              : formatBytes(task.downloaded)
-          }
-        />
-        <DetailRow label="状态" value={meta.label} />
-        <DetailRow label="连接数" value={String(task.connections)} />
-        <DetailRow
-          label="下载耗时"
-          value={formatDuration(activeElapsedMs(task))}
-          // 纯下载：暂停期间不累计；完成后冻结
-        />
-        <DetailRow
-          label="总耗时"
-          value={formatDuration(totalElapsedMs(task, now))}
-          // 创建到结束（含暂停）；已完成/失败后不再随时间增长
-        />
-        <DetailRow
-          label="平均速度"
-          value={formatSpeed(task.avgSpeed || 0) || '—'}
-        />
-        {(task.checksumStatus || task.checksumActual || task.checksumExpected) && (
+        <div className="dialog-body">
           <DetailRow
-            label="校验和"
+            label="文件名"
+            value={task.fileName}
+            onCopy={() => copy(task.fileName, 'name')}
+            copied={copied === 'name'}
+          />
+          <DetailRow
+            label="链接"
+            value={task.url}
+            mono
+            onCopy={() => copy(task.url, 'url')}
+            copied={copied === 'url'}
+          />
+          <DetailRow
+            label="下载路径"
+            value={fullPath}
+            mono
+            onCopy={() => copy(fullPath, 'path')}
+            copied={copied === 'path'}
+          />
+          <DetailRow
+            label="大小"
             value={
-              [
-                task.checksumAlgo ? task.checksumAlgo.toUpperCase() : '',
-                task.checksumActual ? `实际 ${task.checksumActual.slice(0, 16)}…` : '',
-                task.checksumStatus ? (checksumStatusMeta[task.checksumStatus]?.label ?? task.checksumStatus) : '',
-              ]
-                .filter(Boolean)
-                .join(' · ') || '—'
+              task.totalSize > 0
+                ? `${formatBytes(task.downloaded)} / ${formatBytes(task.totalSize)}（${percent(task)}%）`
+                : formatBytes(task.downloaded)
             }
-            mono
           />
-        )}
-        {task.checksumExpected && (
+          <DetailRow label="状态" value={meta.label} />
+          <DetailRow label="连接数" value={String(task.connections)} />
           <DetailRow
-            label="期望校验值"
-            value={task.checksumExpected}
-            mono
-            onCopy={() => copy(task.checksumExpected ?? '', 'checksum')}
-            copied={copied === 'checksum'}
+            label="优先级"
+            value={task.priority === 2 ? '高' : task.priority === 0 ? '低' : '普通'}
           />
-        )}
-        <DetailRow
-          label="创建时间"
-          value={new Date(task.createdAt).toLocaleString('zh-CN', {hour12: false})}
-        />
-        {task.finishedAt &&
-          !task.finishedAt.startsWith('0001-01-01') &&
-          (task.status === 'completed' || task.status === 'failed') && (
+          <DetailRow
+            label="限速"
+            value={task.speedLimit > 0 ? formatSpeed(task.speedLimit) : '跟随全局'}
+          />
+          {task.startAt && !task.startAt.startsWith('0001-01-01') && (
             <DetailRow
-              label="结束时间"
-              value={new Date(task.finishedAt).toLocaleString('zh-CN', {hour12: false})}
+              label="定时开始"
+              value={new Date(task.startAt).toLocaleString('zh-CN', {hour12: false})}
             />
           )}
+          <DetailRow
+            label="下载耗时"
+            value={formatDuration(activeElapsedMs(task))}
+            // 纯下载：暂停期间不累计；完成后冻结
+          />
+          <DetailRow
+            label="总耗时"
+            value={formatDuration(totalElapsedMs(task, now))}
+            // 创建到结束（含暂停）；已完成/失败后不再随时间增长
+          />
+          <DetailRow
+            label="平均速度"
+            value={formatSpeed(task.avgSpeed || 0) || '—'}
+          />
+          {(task.checksumStatus || task.checksumActual || task.checksumExpected) && (
+            <DetailRow
+              label="校验和"
+              value={
+                [
+                  task.checksumAlgo ? task.checksumAlgo.toUpperCase() : '',
+                  task.checksumActual ? `实际 ${task.checksumActual.slice(0, 16)}…` : '',
+                  task.checksumStatus ? (checksumStatusMeta[task.checksumStatus]?.label ?? task.checksumStatus) : '',
+                ]
+                  .filter(Boolean)
+                  .join(' · ') || '—'
+              }
+              mono
+            />
+          )}
+          {task.checksumExpected && (
+            <DetailRow
+              label="期望校验值"
+              value={task.checksumExpected}
+              mono
+              onCopy={() => copy(task.checksumExpected ?? '', 'checksum')}
+              copied={copied === 'checksum'}
+            />
+          )}
+          <DetailRow
+            label="创建时间"
+            value={new Date(task.createdAt).toLocaleString('zh-CN', {hour12: false})}
+          />
+          {task.finishedAt &&
+            !task.finishedAt.startsWith('0001-01-01') &&
+            (task.status === 'completed' || task.status === 'failed') && (
+              <DetailRow
+                label="结束时间"
+                value={new Date(task.finishedAt).toLocaleString('zh-CN', {hour12: false})}
+              />
+            )}
+        </div>
         <div className="dialog-actions">
           <button className="btn primary" onClick={onClose}>
             关闭

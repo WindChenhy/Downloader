@@ -14,12 +14,24 @@ export function ApplyCloseAction(arg1, arg2) {
   return window['go']['main']['App']['ApplyCloseAction'](arg1, arg2);
 }
 
+export function ExportTasksJSON() {
+  return window['go']['main']['App']['ExportTasksJSON']();
+}
+
 export function GetSettings() {
   return window['go']['main']['App']['GetSettings']();
 }
 
 export function GetTasks() {
   return window['go']['main']['App']['GetTasks']();
+}
+
+export function ImportTasksJSON(arg1) {
+  return window['go']['main']['App']['ImportTasksJSON'](arg1);
+}
+
+export function MoveTask(arg1, arg2) {
+  return window['go']['main']['App']['MoveTask'](arg1, arg2);
 }
 
 export function OpenFolder(arg1, arg2) {
@@ -44,6 +56,18 @@ export function ResumeTask(arg1) {
 
 export function SaveSettings(arg1) {
   return window['go']['main']['App']['SaveSettings'](arg1);
+}
+
+export function SetTaskPriority(arg1, arg2) {
+  return window['go']['main']['App']['SetTaskPriority'](arg1, arg2);
+}
+
+export function SetTaskSpeedLimit(arg1, arg2) {
+  return window['go']['main']['App']['SetTaskSpeedLimit'](arg1, arg2);
+}
+
+export function SetTaskStartAt(arg1, arg2) {
+  return window['go']['main']['App']['SetTaskStartAt'](arg1, arg2);
 }
 
 export function ShowWindow() {
