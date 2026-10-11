@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,6 +10,8 @@ import (
 	"sync/atomic"
 
 	"downloader/engine"
+	"downloader/engine/api"
+	"downloader/sysaction"
 
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -18,12 +21,15 @@ import (
 type App struct {
 	ctx context.Context
 	mgr *engine.Manager
+	api *api.Server
 	// quitting 主动退出标志：为 true 时 OnBeforeClose 不再拦截，
 	// 否则托盘/弹窗选「退出」后 close 生命周期会再次进入询问逻辑，
 	// 把窗口关掉却拦下进程退出，任务管理器里留下幽灵进程。
 	quitting atomic.Bool
 	// 通知开关缓存：notify 回调可能在引擎事件路径触发，禁止再抢 Manager 锁
 	notifyCreate, notifyPause, notifyComplete, notifyFail atomic.Bool
+	// uiLang 界面语言缓存（zh-CN / en-US），随设置同步；通知与托盘文案使用
+	uiLang atomic.Value
 }
 
 func NewApp() *App { return &App{} }
@@ -37,26 +43,33 @@ func (a *App) startup(ctx context.Context) {
 	}
 	dataDir = filepath.Join(dataDir, "downloader")
 
-	mgr, err := engine.NewManager(dataDir, func(name string, data ...interface{}) {
-		runtime.EventsEmit(ctx, name, data...)
-		if len(data) == 0 {
-			return
-		}
-		t, ok := data[0].(engine.Task)
-		if !ok {
-			return
-		}
-		switch name {
-		case "task:created":
-			a.notifyTaskCreated(t)
-		case "task:paused":
-			a.notifyTaskPaused(t)
-		case "task:finished":
-			a.notifyTaskFinished(t)
-		case "queue:idle":
-			a.onQueueIdle()
-		}
-	})
+	// 分块暂存目录放系统本地应用数据（Windows = %LOCALAPPDATA%\downloader\staging）：
+	// 下载中的 .part 文件不出现在下载目录里，完成时才移动过去
+	stageRoot := dataDir
+	if cacheDir, err := os.UserCacheDir(); err == nil {
+		stageRoot = filepath.Join(cacheDir, "downloader")
+	}
+
+	mgr, err := engine.NewManager(dataDir,
+		func(ev engine.Event) {
+			// Wails 事件载荷与旧格式保持一致：列表事件发 []Task，其余发单个 Task
+			payload := []interface{}{ev.Task}
+			if ev.Name == engine.EventTasksChanged {
+				payload = []interface{}{ev.Tasks}
+			}
+			runtime.EventsEmit(ctx, string(ev.Name), payload...)
+			switch ev.Name {
+			case engine.EventTaskCreated:
+				a.notifyTaskCreated(ev.Task)
+			case engine.EventTaskPaused:
+				a.notifyTaskPaused(ev.Task)
+			case engine.EventTaskFinished:
+				a.notifyTaskFinished(ev.Task)
+			case engine.EventQueueIdle:
+				a.onQueueIdle()
+			}
+		},
+		engine.WithStagingDir(filepath.Join(stageRoot, "staging")))
 	if err != nil {
 		runtime.MessageDialog(ctx, runtime.MessageDialogOptions{
 			Type:    runtime.ErrorDialog,
@@ -74,10 +87,9 @@ func (a *App) startup(ctx context.Context) {
 	_ = runtime.InitializeNotifications(ctx)
 	_, _ = runtime.RequestNotificationAuthorization(ctx)
 
-	// 本地 REST API
-	if st := mgr.GetSettings(); st.APIEnabled && st.APIPort > 0 {
-		mgr.StartAPI(fmt.Sprintf("127.0.0.1:%d", st.APIPort))
-	}
+	// 本地 REST API（按设置启停；设置保存后由 SaveSettings 同步，无需重启）
+	a.api = api.New(mgr)
+	a.api.Sync()
 
 	// 剪贴板监听
 	go a.watchClipboard()
@@ -155,8 +167,8 @@ func (a *App) onQueueIdle() {
 			break
 		}
 	}
-	err := engine.RunAfterCompleteAction(action, openDir)
-	if engine.IsExitAppAction(err) {
+	err := sysaction.Run(action, openDir)
+	if errors.Is(err, sysaction.ErrExitApp) {
 		a.requestQuit()
 		return
 	}
@@ -173,12 +185,13 @@ func (a *App) RemoveTask(id string, deleteFiles bool) error {
 // GetSettings 返回全局设置。
 func (a *App) GetSettings() engine.Settings { return a.mgr.GetSettings() }
 
-// SaveSettings 保存设置并同步通知开关缓存。
+// SaveSettings 保存设置并同步通知开关缓存与 REST API 启停。
 func (a *App) SaveSettings(s engine.Settings) error {
 	if err := a.mgr.SaveSettings(s); err != nil {
 		return err
 	}
 	a.syncNotifyFlags()
+	go a.api.Sync() // 异步：避免与在途请求互相等待
 	return nil
 }
 

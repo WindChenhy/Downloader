@@ -1,39 +1,47 @@
-package engine
+// Package sysaction 执行「全部下载结束」后的系统级动作。
+// 动作取值与设置存储中的 afterComplete 字段对应；执行属应用层关注点，
+// 引擎只产出设置字符串，不直接触碰操作系统。
+package sysaction
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"runtime"
 )
 
-// RunAfterCompleteAction 执行「全部下载结束」动作。
-// openDir 为空时 open_dir 动作退化为不打开。
-// AfterCompleteExitApp 不在此处退出进程，而是返回 errExitApp 交 App 处理。
-func RunAfterCompleteAction(action, openDir string) error {
+// 动作取值。
+const (
+	None     = "none"
+	OpenDir  = "open_dir"
+	Shutdown = "shutdown"
+	Sleep    = "sleep"
+	ExitApp  = "exit_app"
+)
+
+// ErrExitApp 信号：调用方收到后自行退出进程（本包不直接杀进程）。
+var ErrExitApp = errors.New("exit_app")
+
+// Run 执行动作；openDir 为空时 open_dir 退化为不打开。
+func Run(action, openDir string) error {
 	switch action {
-	case AfterCompleteNone, "":
+	case None, "":
 		return nil
-	case AfterCompleteOpenDir:
+	case OpenDir:
 		if openDir == "" {
 			return nil
 		}
 		return openFolder(openDir)
-	case AfterCompleteShutdown:
+	case Shutdown:
 		return shutdownOS()
-	case AfterCompleteSleep:
+	case Sleep:
 		return sleepOS()
-	case AfterCompleteExitApp:
-		return errExitApp
+	case ExitApp:
+		return ErrExitApp
 	default:
 		return fmt.Errorf("未知完成后动作: %s", action)
 	}
 }
-
-// errExitApp 信号：App 收到后调用 requestQuit。
-var errExitApp = fmt.Errorf("exit_app")
-
-// IsExitAppAction 判断错误是否为退出应用信号。
-func IsExitAppAction(err error) bool { return err == errExitApp }
 
 func openFolder(dir string) error {
 	switch runtime.GOOS {

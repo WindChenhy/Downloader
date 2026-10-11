@@ -163,6 +163,8 @@ export namespace engine {
 	    clipboardWatch: boolean;
 	    apiEnabled: boolean;
 	    apiPort: number;
+	    apiToken?: string;
+	    allowSaveDirs?: string[];
 	    closeAction: string;
 	    dirCategories: DirCategory[];
 	    autoExtract: boolean;
@@ -171,6 +173,7 @@ export namespace engine {
 	    notifyOnComplete: boolean;
 	    notifyOnFail: boolean;
 	    afterComplete: string;
+	    language: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -191,6 +194,8 @@ export namespace engine {
 	        this.clipboardWatch = source["clipboardWatch"];
 	        this.apiEnabled = source["apiEnabled"];
 	        this.apiPort = source["apiPort"];
+	        this.apiToken = source["apiToken"];
+	        this.allowSaveDirs = source["allowSaveDirs"];
 	        this.closeAction = source["closeAction"];
 	        this.dirCategories = this.convertValues(source["dirCategories"], DirCategory);
 	        this.autoExtract = source["autoExtract"];
@@ -199,6 +204,7 @@ export namespace engine {
 	        this.notifyOnComplete = source["notifyOnComplete"];
 	        this.notifyOnFail = source["notifyOnFail"];
 	        this.afterComplete = source["afterComplete"];
+	        this.language = source["language"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

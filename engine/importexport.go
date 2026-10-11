@@ -34,13 +34,19 @@ func (m *Manager) ImportTasksJSON(data []byte) (BatchAddResult, error) {
 		if src.Status == StatusCompleted {
 			continue
 		}
+		// 导入文件内容不可信：目录不在白名单内时收敛到默认下载目录，
+		// 防止借"任务包"向任意目录写文件
+		saveDir := src.SaveDir
+		if saveDir != "" && !m.SaveDirAllowed(saveDir) {
+			saveDir = ""
+		}
 		startAt := ""
 		if !src.StartAt.IsZero() {
 			startAt = src.StartAt.Format(time.RFC3339)
 		}
 		t, err := m.AddTaskWithChecksum(AddTaskParams{
 			URL:              src.URL,
-			SaveDir:          src.SaveDir,
+			SaveDir:          saveDir,
 			Connections:      src.Connections,
 			CustomName:       src.CustomName,
 			ChecksumAlgo:     src.ChecksumAlgo,

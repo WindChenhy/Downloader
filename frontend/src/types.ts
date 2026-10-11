@@ -4,6 +4,8 @@ export interface Task {
   id: string;
   url: string;
   fileName: string;
+  /** 自定义文件名；空 = 自动从链接/响应头获取 */
+  customName?: string;
   saveDir: string;
   totalSize: number; // <=0 表示未知
   downloaded: number;
@@ -71,6 +73,10 @@ export interface Settings {
   clipboardWatch: boolean;
   apiEnabled: boolean;
   apiPort: number;
+  /** REST API 访问令牌；由后端生成，保存时空值表示保留现有 */
+  apiToken?: string;
+  /** API/导入允许的保存目录白名单；空 = 仅默认下载目录 */
+  allowSaveDirs?: string[];
   closeAction: CloseAction;
   dirCategories: DirCategory[];
   autoExtract: boolean;
@@ -81,6 +87,8 @@ export interface Settings {
   notifyOnFail: boolean;
   /** 全部下载结束后的动作 */
   afterComplete: AfterCompleteAction;
+  /** 界面语言（解析后的具体值，供系统通知/托盘使用）；前端偏好见 i18n 的 LangPref */
+  language?: 'zh-CN' | 'en-US';
 }
 
 export type ThemeMode = 'light' | 'dark' | 'system';

@@ -22,6 +22,12 @@ const (
 	initialBackoff    = 1 * time.Second
 	maxBackoff        = 16 * time.Second
 	sidecarFlushEvery = 2 * time.Second
+	// bodyIdleTimeout 连续无字节判定的空闲阈值：连接中途僵死（无 RST/FIN）
+	// 会让 io.Copy 永远阻塞，任务卡在某个百分比、速度归零。超时后主动
+	// 断开，交给上层重试逻辑从段内偏移续传。
+	bodyIdleTimeout = 60 * time.Second
+	// idleProbeEvery 看门狗巡检周期
+	idleProbeEvery = 5 * time.Second
 )
 
 // offsetWriter 从固定偏移写入文件，供 io.Copy 流式落盘使用。
@@ -41,6 +47,52 @@ func (w *offsetWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// idleWatch 响应体空闲看门狗：连续 bodyIdleTimeout 未读到任何字节即判定
+// 连接僵死，取消请求上下文使阻塞中的 Read 立刻返回，由上层重试逻辑续传。
+// 请求须使用派生上下文（newIdleWatch 的 cancel）发起。
+type idleWatch struct {
+	io.ReadCloser
+	last    atomic.Int64       // 最近读到字节的时刻（unix nano）
+	stalled atomic.Bool        // 看门狗已判定空闲超时
+	cancel  context.CancelFunc // 空闲超时时取消请求上下文
+	stop    chan struct{}
+	once    sync.Once
+}
+
+// newIdleWatch 包装响应体并启动看门狗；cancel 为该请求上下文的取消函数。
+func newIdleWatch(body io.ReadCloser, cancel context.CancelFunc) *idleWatch {
+	w := &idleWatch{ReadCloser: body, cancel: cancel, stop: make(chan struct{})}
+	w.last.Store(time.Now().UnixNano())
+	go func() {
+		ticker := time.NewTicker(idleProbeEvery)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-w.stop:
+				return
+			case <-ticker.C:
+				if time.Since(time.Unix(0, w.last.Load())) >= bodyIdleTimeout {
+					w.stalled.Store(true)
+					w.cancel()
+					return
+				}
+			}
+		}
+	}()
+	return w
+}
+
+func (w *idleWatch) Read(p []byte) (int, error) {
+	n, err := w.ReadCloser.Read(p)
+	if n > 0 {
+		w.last.Store(time.Now().UnixNano())
+	}
+	return n, err
+}
+
+// Stop 停止看门狗 goroutine。
+func (w *idleWatch) Stop() { w.once.Do(func() { close(w.stop) }) }
+
 // taskRunner 负责一个任务单次运行的完整下载逻辑：
 // 探测 → 续传校验 → 分段下载（含重试）→ 落盘 → 改名。
 type taskRunner struct {
@@ -48,9 +100,10 @@ type taskRunner struct {
 	h            *taskHandle
 	task         Task // 本地副本，关键字段经 updateTask 写回
 	cancel       context.CancelFunc
-	settings     Settings // 运行开始时的设置快照
-	fetchURL     string   // 实际请求 URL（可能经过镜像改写）
-	userAgent    string   // 本轮使用的 UA
+	client       *http.Client // 运行开始时的客户端快照，本轮内固定
+	settings     Settings     // 运行开始时的设置快照
+	fetchURL     string       // 实际请求 URL（可能经过镜像改写）
+	userAgent    string       // 本轮使用的 UA
 	extraHeaders map[string]string
 	sidecar      *Sidecar
 	scMu         sync.Mutex
@@ -59,23 +112,25 @@ type taskRunner struct {
 	statePath    string
 	partFile     *os.File
 	resuming     bool
-	taskLimiter  *rateLimiter // 每任务限速；nil 表示不限
+	taskLimiter  *rateLimiter // 每任务限速器（dispatchLocked 创建；0 = 不限）
 }
 
 func (r *taskRunner) run(ctx context.Context) error {
-	// 运行开始时锁定设置快照：UA/请求头/镜像/代理在本轮内保持一致
+	// 运行开始时锁定设置快照：UA/请求头/镜像/代理在本轮内保持一致，
+	// client 一并快照——否则保存设置重建客户端后，同一文件的不同分段
+	// 可能走不同的代理出口
 	r.settings = r.m.GetSettings()
+	r.client = r.m.httpClient()
 	r.userAgent = strings.TrimSpace(r.settings.UserAgent)
 	if r.userAgent == "" {
 		r.userAgent = defaultUA
 	}
 	r.extraHeaders = parseExtraHeaders(r.settings.ExtraHeaders)
 	r.fetchURL = resolveFetchURL(r.settings, r.task.URL)
-	if r.task.SpeedLimit > 0 {
-		r.taskLimiter = newRateLimiter(r.task.SpeedLimit)
-	}
+	// taskLimiter 由 dispatchLocked 创建并挂在 handle 上（运行中可经
+	// SetTaskSpeedLimit 热更新），这里不再自建
 
-	probe, err := probeURL(ctx, r.m.httpClient(), r.fetchURL, r.userAgent, r.extraHeaders)
+	probe, err := probeURL(ctx, r.client, r.fetchURL, r.userAgent, r.extraHeaders)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
 			return ErrPaused
@@ -84,9 +139,9 @@ func (r *taskRunner) run(ctx context.Context) error {
 	}
 
 	r.statePath = r.m.store.StatePath(r.task.ID)
-	// 暂存文件按任务 ID 命名、放在保存目录的 .downloader 子目录内：
-	// 与最终文件名解耦（改名/重名检测都不影响），且同盘完成时原地改名
-	r.partPath = r.m.stagingPath(r.task.SaveDir, r.task.ID)
+	// 暂存文件按任务 ID 命名、放在应用数据目录的统一暂存目录内
+	// （不落下载目录），与最终文件名解耦；完成时经 finishFile 移动过去
+	r.partPath = r.m.stagingPath(r.task.ID)
 	sc := r.tryLoadSidecar(probe)
 	fresh := sc == nil
 	if !fresh {
@@ -393,14 +448,16 @@ func (r *taskRunner) fetchRange(ctx context.Context, idx int, live *atomic.Int64
 		r.markChunkDone(idx)
 		return nil
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.fetchURL, nil)
+	rctx, rcancel := context.WithCancel(ctx)
+	defer rcancel()
+	req, err := http.NewRequestWithContext(rctx, http.MethodGet, r.fetchURL, nil)
 	if err != nil {
 		return err
 	}
 	applyExtraHeaders(req, r.extraHeaders)
 	req.Header.Set("User-Agent", r.userAgent)
 	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, c.End))
-	resp, err := r.m.httpClient().Do(req)
+	resp, err := r.client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -408,12 +465,17 @@ func (r *taskRunner) fetchRange(ctx context.Context, idx int, live *atomic.Int64
 	if resp.StatusCode != http.StatusPartialContent {
 		return fmt.Errorf("服务器返回状态码 %d（需要 206）", resp.StatusCode)
 	}
+	body := newIdleWatch(resp.Body, rcancel)
+	defer body.Stop()
 	w := &offsetWriter{f: r.partFile, off: start, onWrite: func(n int64) {
 		r.addChunkProgress(idx, n)
 		live.Add(n) // 每个写入块实时计入进度，而不是等整段完成
 	}}
-	n, err := io.Copy(w, &limitedReader{r: resp.Body, ctx: ctx, l: r.m.limiter, extra: r.taskLimiter})
+	n, err := io.Copy(w, &limitedReader{r: body, ctx: ctx, l: r.m.limiter, extra: r.taskLimiter})
 	if err != nil {
+		if body.stalled.Load() {
+			return fmt.Errorf("连接空闲超过 %s，已断开等待重试", bodyIdleTimeout)
+		}
 		return err
 	}
 	if start+n != c.End+1 {
@@ -462,7 +524,9 @@ func (r *taskRunner) runSingle(ctx context.Context, live *atomic.Int64) error {
 }
 
 func (r *taskRunner) fetchStream(ctx context.Context, offset int64, live *atomic.Int64) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.fetchURL, nil)
+	rctx, rcancel := context.WithCancel(ctx)
+	defer rcancel()
+	req, err := http.NewRequestWithContext(rctx, http.MethodGet, r.fetchURL, nil)
 	if err != nil {
 		return err
 	}
@@ -471,7 +535,7 @@ func (r *taskRunner) fetchStream(ctx context.Context, offset int64, live *atomic
 	if offset > 0 {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
 	}
-	resp, err := r.m.httpClient().Do(req)
+	resp, err := r.client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -482,9 +546,14 @@ func (r *taskRunner) fetchStream(ctx context.Context, offset int64, live *atomic
 	default:
 		return fmt.Errorf("服务器返回状态码 %d，无法续传", resp.StatusCode)
 	}
+	body := newIdleWatch(resp.Body, rcancel)
+	defer body.Stop()
 	w := &offsetWriter{f: r.partFile, off: offset, onWrite: func(n int64) { live.Add(n) }}
-	n, err := io.Copy(w, &limitedReader{r: resp.Body, ctx: ctx, l: r.m.limiter, extra: r.taskLimiter})
+	n, err := io.Copy(w, &limitedReader{r: body, ctx: ctx, l: r.m.limiter, extra: r.taskLimiter})
 	if err != nil {
+		if body.stalled.Load() {
+			return fmt.Errorf("连接空闲超过 %s，已断开等待重试", bodyIdleTimeout)
+		}
 		return err
 	}
 	if r.task.TotalSize > 0 && offset+n != r.task.TotalSize {
@@ -493,6 +562,9 @@ func (r *taskRunner) fetchStream(ctx context.Context, offset int64, live *atomic
 	return nil
 }
 
+// flushSidecar 把变更过的续传状态落盘。
+// 序列化必须在 scMu 内拷贝快照后锁外进行：写入回调会在锁内并发修改
+// Chunks[i]，锁外直接 Marshal 会与其构成数据竞争。
 func (r *taskRunner) flushSidecar() {
 	r.scMu.Lock()
 	if !r.dirty {
@@ -500,18 +572,24 @@ func (r *taskRunner) flushSidecar() {
 		return
 	}
 	r.dirty = false
+	snap := *r.sidecar
+	snap.Chunks = append([]SidecarChunk(nil), r.sidecar.Chunks...)
 	r.scMu.Unlock()
-	_ = saveSidecar(r.statePath, r.sidecar)
+	_ = saveSidecar(r.statePath, &snap)
 }
 
 func (r *taskRunner) saveSidecar() {
 	r.scMu.Lock()
 	r.dirty = false
+	snap := *r.sidecar
+	snap.Chunks = append([]SidecarChunk(nil), r.sidecar.Chunks...)
 	r.scMu.Unlock()
-	_ = saveSidecar(r.statePath, r.sidecar)
+	_ = saveSidecar(r.statePath, &snap)
 }
 
-// finishFile 关闭暂存数据并改名为正式文件（同盘原地改名，瞬时完成）。
+// finishFile 关闭暂存数据并移动为正式文件。
+// 暂存区在应用数据目录，保存目录可能在另一个盘：先尝试原地改名
+// （同盘瞬时），失败（跨盘/目标占用）时退化为复制后删除暂存。
 func (r *taskRunner) finishFile() error {
 	if r.partFile != nil {
 		_ = r.partFile.Sync()
@@ -519,7 +597,7 @@ func (r *taskRunner) finishFile() error {
 		r.partFile = nil
 	}
 	final := filepath.Join(r.task.SaveDir, uniqueName(r.task.SaveDir, r.task.FileName))
-	if err := os.Rename(r.partPath, final); err != nil {
+	if err := moveFile(r.partPath, final); err != nil {
 		return err
 	}
 	r.task.FileName = filepath.Base(final)
@@ -527,8 +605,47 @@ func (r *taskRunner) finishFile() error {
 		t.FileName = r.task.FileName
 	})
 	// 暂存目录已空则移除（其他任务共用时删除失败，忽略）
-	_ = os.Remove(filepath.Dir(r.partPath))
+	_ = os.Remove(r.m.stagingDir())
 	return nil
+}
+
+// moveFile 移动单个文件：优先 os.Rename（同盘原地改名，瞬时）；
+// 跨盘等改名失败时退化为流式复制，校验大小一致后删除源文件。
+func moveFile(src, dst string) error {
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		_ = os.Remove(dst)
+		return err
+	}
+	if err := out.Sync(); err != nil {
+		_ = out.Close()
+		_ = os.Remove(dst)
+		return err
+	}
+	if err := out.Close(); err != nil {
+		_ = os.Remove(dst)
+		return err
+	}
+	if st, err := in.Stat(); err == nil {
+		dstSt, err := os.Stat(dst)
+		if err != nil || dstSt.Size() != st.Size() {
+			_ = os.Remove(dst)
+			return fmt.Errorf("移动后文件大小不一致: %s", dst)
+		}
+	}
+	return os.Remove(src)
 }
 
 // uniqueName 目录下同名文件存在时追加 " (n)" 后缀。

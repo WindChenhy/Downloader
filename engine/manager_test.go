@@ -133,7 +133,7 @@ func waitFor(t *testing.T, cond func() bool, timeout time.Duration) {
 	t.Fatal("等待超时")
 }
 
-func nopNotify(string, ...interface{}) {}
+func nopNotify(Event) {}
 
 func mustManager(t *testing.T) (*Manager, string) {
 	t.Helper()
@@ -168,10 +168,10 @@ func TestManagerMultiChunkDownload(t *testing.T) {
 		t.Fatal("下载内容与原始内容不一致")
 	}
 	// 完成后应清理状态文件与暂存数据，暂存目录也应移除
-	if _, err := os.Stat(m.stagingPath(saveDir, task.ID)); !os.IsNotExist(err) {
+	if _, err := os.Stat(m.stagingPath(task.ID)); !os.IsNotExist(err) {
 		t.Fatal("暂存数据文件应被改名移除")
 	}
-	if _, err := os.Stat(m.stagingDir(saveDir)); !os.IsNotExist(err) {
+	if _, err := os.Stat(m.stagingDir()); !os.IsNotExist(err) {
 		t.Fatal("完成后的暂存目录应被移除")
 	}
 	if _, err := os.Stat(m.store.StatePath(task.ID)); !os.IsNotExist(err) {
@@ -217,7 +217,7 @@ func TestManagerPauseAndResume(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	partPath := m.stagingPath(saveDir, task.ID)
+	partPath := m.stagingPath(task.ID)
 
 	waitFor(t, func() bool {
 		return m.GetTasks()[0].Status == StatusRunning
@@ -299,10 +299,10 @@ func TestManagerResumeFromSeededSidecar(t *testing.T) {
 	chunks := CalculateChunks(10000, 4) // 4 段,每段 2500
 	// 暂存数据已包含全部内容,sidecar 标记第 0、2 段完成、第 1 段收到 1000 字节——
 	// 恢复后服务器只应收到:第 1 段的 bytes=3500-4999 与第 3 段的 bytes=7500-9999
-	if err := os.MkdirAll(m.stagingDir(saveDir), 0o755); err != nil {
+	if err := os.MkdirAll(m.stagingDir(), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(m.stagingPath(saveDir, id), content, 0o644); err != nil {
+	if err := os.WriteFile(m.stagingPath(id), content, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	sc := &Sidecar{
@@ -365,7 +365,7 @@ func TestManagerResumeFromSeededSidecar(t *testing.T) {
 	if string(got) != string(content) {
 		t.Fatal("续传后内容不一致")
 	}
-	if _, err := os.Stat(m.stagingPath(saveDir, id)); !os.IsNotExist(err) {
+	if _, err := os.Stat(m.stagingPath(id)); !os.IsNotExist(err) {
 		t.Fatal("暂存数据应被改名移除")
 	}
 }
@@ -436,15 +436,15 @@ func TestManagerActiveTimeAndEvents(t *testing.T) {
 
 	var mu sync.Mutex
 	created, paused, finished := 0, 0, 0
-	m, err := NewManager(t.TempDir(), func(name string, _ ...interface{}) {
+	m, err := NewManager(t.TempDir(), func(ev Event) {
 		mu.Lock()
 		defer mu.Unlock()
-		switch name {
-		case "task:created":
+		switch ev.Name {
+		case EventTaskCreated:
 			created++
-		case "task:paused":
+		case EventTaskPaused:
 			paused++
-		case "task:finished":
+		case EventTaskFinished:
 			finished++
 		}
 	})
@@ -528,11 +528,11 @@ func TestNotifyCallbackCanReenterManager(t *testing.T) {
 
 	var m *Manager
 	done := make(chan struct{})
-	m, err := NewManager(t.TempDir(), func(name string, _ ...interface{}) {
+	m, err := NewManager(t.TempDir(), func(ev Event) {
 		// 模拟上层在事件回调中读设置 / 列任务
 		_ = m.GetSettings()
 		_ = m.GetTasks()
-		if name == "task:created" {
+		if ev.Name == EventTaskCreated {
 			close(done)
 		}
 	})

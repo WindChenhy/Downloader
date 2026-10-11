@@ -5,14 +5,16 @@ import {ClipboardSetText} from '../../wailsjs/runtime/runtime';
 import type {Task} from '../types';
 import {
   activeElapsedMs,
-  checksumStatusMeta,
+  checksumStatusLabel,
   formatBytes,
+  formatDateTime,
   formatDuration,
   formatSpeed,
   percent,
-  statusMeta,
+  statusLabel,
   totalElapsedMs,
 } from '../lib/format';
+import {t, useI18n} from '../i18n';
 import {CopyIcon} from './icons';
 
 interface Props {
@@ -37,12 +39,12 @@ function DetailRow({label, value, mono, onCopy, copied}: {
       {onCopy && (
         <button
           className="btn icon copy-btn"
-          title="复制"
+          title={t('复制')}
           onClick={() => {
             onCopy();
           }}
         >
-          {copied ? <span className="copied-text">已复制</span> : <CopyIcon size={13} />}
+          {copied ? <span className="copied-text">{t('已复制')}</span> : <CopyIcon size={13} />}
         </button>
       )}
     </div>
@@ -50,6 +52,7 @@ function DetailRow({label, value, mono, onCopy, copied}: {
 }
 
 export default function TaskDetailDialog({task, onClose}: Props) {
+  const {t} = useI18n();
   const [copied, setCopied] = useState('');
   // 暂停/排队时后端不再推进度，总耗时靠本地秒表继续走；完成后 totalElapsedMs 已冻结
   const [now, setNow] = useState(() => Date.now());
@@ -58,7 +61,6 @@ export default function TaskDetailDialog({task, onClose}: Props) {
     return () => window.clearInterval(id);
   }, []);
 
-  const meta = statusMeta[task.status];
   const fullPath = `${task.saveDir.replace(/\//g, '\\')}\\${task.fileName}`;
 
   const copy = (text: string, key: string) => {
@@ -71,74 +73,71 @@ export default function TaskDetailDialog({task, onClose}: Props) {
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="dialog dialog-compact">
-        <h2>任务详情</h2>
+        <h2>{t('任务详情')}</h2>
         <div className="dialog-body">
           <DetailRow
-            label="文件名"
+            label={t('文件名')}
             value={task.fileName}
             onCopy={() => copy(task.fileName, 'name')}
             copied={copied === 'name'}
           />
           <DetailRow
-            label="链接"
+            label={t('链接')}
             value={task.url}
             mono
             onCopy={() => copy(task.url, 'url')}
             copied={copied === 'url'}
           />
           <DetailRow
-            label="下载路径"
+            label={t('下载路径')}
             value={fullPath}
             mono
             onCopy={() => copy(fullPath, 'path')}
             copied={copied === 'path'}
           />
           <DetailRow
-            label="大小"
+            label={t('大小')}
             value={
               task.totalSize > 0
                 ? `${formatBytes(task.downloaded)} / ${formatBytes(task.totalSize)}（${percent(task)}%）`
                 : formatBytes(task.downloaded)
             }
           />
-          <DetailRow label="状态" value={meta.label} />
-          <DetailRow label="连接数" value={String(task.connections)} />
+          <DetailRow label={t('状态')} value={statusLabel(task.status)} />
+          <DetailRow label={t('连接数')} value={String(task.connections)} />
           <DetailRow
-            label="优先级"
-            value={task.priority === 2 ? '高' : task.priority === 0 ? '低' : '普通'}
+            label={t('优先级')}
+            value={task.priority === 2 ? t('高') : task.priority === 0 ? t('低') : t('普通')}
           />
           <DetailRow
-            label="限速"
-            value={task.speedLimit > 0 ? formatSpeed(task.speedLimit) : '跟随全局'}
+            label={t('限速')}
+            value={task.speedLimit > 0 ? formatSpeed(task.speedLimit) : t('跟随全局')}
           />
-          {task.startAt && !task.startAt.startsWith('0001-01-01') && (
-            <DetailRow
-              label="定时开始"
-              value={new Date(task.startAt).toLocaleString('zh-CN', {hour12: false})}
-            />
+          {formatDateTime(task.startAt) && (
+            <DetailRow label={t('定时开始')} value={formatDateTime(task.startAt)} />
           )}
           <DetailRow
-            label="下载耗时"
+            label={t('下载耗时')}
             value={formatDuration(activeElapsedMs(task))}
             // 纯下载：暂停期间不累计；完成后冻结
           />
           <DetailRow
-            label="总耗时"
+            label={t('总耗时')}
             value={formatDuration(totalElapsedMs(task, now))}
             // 创建到结束（含暂停）；已完成/失败后不再随时间增长
           />
           <DetailRow
-            label="平均速度"
+            label={t('平均速度')}
             value={formatSpeed(task.avgSpeed || 0) || '—'}
           />
           {(task.checksumStatus || task.checksumActual || task.checksumExpected) && (
             <DetailRow
-              label="校验和"
+              label={t('校验和')}
               value={
                 [
                   task.checksumAlgo ? task.checksumAlgo.toUpperCase() : '',
-                  task.checksumActual ? `实际 ${task.checksumActual.slice(0, 16)}…` : '',
-                  task.checksumStatus ? (checksumStatusMeta[task.checksumStatus]?.label ?? task.checksumStatus) : '',
+                  task.checksumActual ? `${t('实际')} ${task.checksumActual.slice(0, 16)}…` : '',
+                  task.checksumStatus ? checksumStatusLabel(task.checksumStatus) : '',
                 ]
                   .filter(Boolean)
                   .join(' · ') || '—'
@@ -148,29 +147,22 @@ export default function TaskDetailDialog({task, onClose}: Props) {
           )}
           {task.checksumExpected && (
             <DetailRow
-              label="期望校验值"
+              label={t('期望校验值')}
               value={task.checksumExpected}
               mono
               onCopy={() => copy(task.checksumExpected ?? '', 'checksum')}
               copied={copied === 'checksum'}
             />
           )}
-          <DetailRow
-            label="创建时间"
-            value={new Date(task.createdAt).toLocaleString('zh-CN', {hour12: false})}
-          />
-          {task.finishedAt &&
-            !task.finishedAt.startsWith('0001-01-01') &&
-            (task.status === 'completed' || task.status === 'failed') && (
-              <DetailRow
-                label="结束时间"
-                value={new Date(task.finishedAt).toLocaleString('zh-CN', {hour12: false})}
-              />
+          <DetailRow label={t('创建时间')} value={formatDateTime(task.createdAt) || '—'} />
+          {(task.status === 'completed' || task.status === 'failed') &&
+            formatDateTime(task.finishedAt) && (
+              <DetailRow label={t('结束时间')} value={formatDateTime(task.finishedAt)} />
             )}
         </div>
         <div className="dialog-actions">
           <button className="btn primary" onClick={onClose}>
-            关闭
+            {t('关闭')}
           </button>
         </div>
       </div>

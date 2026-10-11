@@ -1,6 +1,11 @@
 import type {Status, Task} from '../types';
+import {t} from '../i18n';
 
-/** formatBytes 字节数 → 人读大小，如 `1.2 MB`。 */
+/**
+ * formatBytes 字节数 → 人读大小，如 `1.2 MB`。
+ * 100 以下保留两位小数：一位小数时 1.39/1.44 GB 都显示为 "1.4 GB"，
+ * 会让人误以为已下完却停在 97%。
+ */
 export function formatBytes(n: number): string {
   if (!n || n < 0) return '—';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -10,7 +15,7 @@ export function formatBytes(n: number): string {
     v /= 1024;
     i++;
   }
-  return `${v >= 100 || i === 0 ? v.toFixed(0) : v.toFixed(1)} ${units[i]}`;
+  return `${v >= 100 || i === 0 ? v.toFixed(0) : v.toFixed(2)} ${units[i]}`;
 }
 
 /** formatSpeed 字节/秒 → `1.2 MB/s`；非正数返回空串。 */
@@ -28,6 +33,14 @@ export function formatETA(seconds: number): string {
   if (m < 60) return `${m} 分 ${s % 60} 秒`;
   const h = Math.floor(m / 60);
   return `${h} 小时 ${m % 60} 分`;
+}
+
+/** formatDateTime ISO/时间戳 → 本地日期时间文案；无效或 Go 零值返回空串。 */
+export function formatDateTime(v?: string | null): string {
+  if (!v || v.startsWith('0001-01-01')) return '';
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime()) || d.getFullYear() <= 1) return '';
+  return d.toLocaleString('zh-CN', {hour12: false});
 }
 
 /** formatDuration 毫秒 → 人读时长，如 `1分23秒` / `2小时5分`。 */
@@ -130,12 +143,32 @@ export function parseAndExpandUrls(text: string): string[] {
   return parseDownloadUrls(expandSequenceUrls(text).join('\n'));
 }
 
-export const checksumStatusMeta: Record<string, {label: string; cls: string}> = {
-  ok: {label: '校验通过', cls: 'completed'},
-  mismatch: {label: '校验失败', cls: 'failed'},
-  error: {label: '校验错误', cls: 'failed'},
-  skipped: {label: '已计算', cls: 'paused'},
+// 状态文案与样式（cls 与状态值同名）；文案经 i18n 翻译。
+const STATUS_LABELS: Record<Status, string> = {
+  queued: '排队中',
+  running: '下载中',
+  paused: '已暂停',
+  completed: '已完成',
+  failed: '失败',
 };
+
+/** statusLabel 状态的中文本地化标签。 */
+export function statusLabel(status: Status): string {
+  return t(STATUS_LABELS[status]);
+}
+
+export const checksumStatusLabels: Record<string, string> = {
+  ok: '校验通过',
+  mismatch: '校验失败',
+  error: '校验错误',
+  skipped: '已计算',
+};
+
+/** checksumStatusLabel 校验状态的本地化标签；未知值原样返回。 */
+export function checksumStatusLabel(status: string): string {
+  const key = checksumStatusLabels[status];
+  return key === undefined ? status : t(key);
+}
 
 /** percent 下载进度百分比（0–100）；完成态固定 100。 */
 export function percent(task: {downloaded: number; totalSize: number; status: Status}): number {
@@ -144,11 +177,4 @@ export function percent(task: {downloaded: number; totalSize: number; status: St
   return Math.min(100, Math.round((task.downloaded / task.totalSize) * 100));
 }
 
-/** statusMeta 任务状态的中文标签与样式类名。 */
-export const statusMeta: Record<Status, {label: string; cls: string}> = {
-  queued: {label: '排队中', cls: 'queued'},
-  running: {label: '下载中', cls: 'running'},
-  paused: {label: '已暂停', cls: 'paused'},
-  completed: {label: '已完成', cls: 'completed'},
-  failed: {label: '失败', cls: 'failed'},
-};
+// 状态样式类名与状态值同名（status-queued 等），无需单独映射。

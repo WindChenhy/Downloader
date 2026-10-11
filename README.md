@@ -37,6 +37,7 @@
 - 删除任务时可选「仅删除记录」或「连文件一起删除」
 - **导入 / 导出任务列表**：设置页可将任务导出为 JSON 备份，或从 JSON 导入（已完成任务跳过，暂停/失败/排队会重建）
 - 亮色 / 暗色 / 跟随系统三态主题 + 8 种强调色；顶栏与设置页主题控件统一使用线性 SVG 图标
+- **多语言界面**：简体中文 / English / 跟随系统（按浏览器语言），切换即时生效；解析后的语言同步进引擎设置，系统通知跟随切换（托盘菜单在下次启动时应用）
 - **系统托盘**：托盘菜单可唤出主窗口 / 退出；退出时会正确移除托盘图标并结束进程（无残留幽灵进程）
 - **关闭行为可配置**（设置 → 窗口）：
   - **每次询问**（默认）：点关闭弹出确认框——「最小化到托盘」/「直接退出」/「取消」；主操作为「直接退出」，不会默认最小化；可勾选「记住我的选择，不再询问」
@@ -56,28 +57,48 @@
 
 ## REST API
 
-仅绑定本机回环地址；端口可在设置中修改（重启应用生效）。
+仅绑定本机回环地址；端口与开关在设置中修改，保存后立即启停生效（无需重启应用）。
+
+所有请求须通过本机边界校验（`ping` 除外须携带令牌）：
+
+- **令牌**：携带 `X-API-Token: <token>` 或 `Authorization: Bearer <token>`；令牌在开启 API 时自动生成，可在设置页查看/复制，保存设置时留空表示保留现有令牌
+- **Host 校验**：Host 头必须是 `127.0.0.1` / `localhost` / `[::1]`，防 DNS rebinding
+- **Origin 校验**：携带 Origin 头的跨站请求一律拒绝，防浏览器 CSRF
+- **Content-Type**：带请求体的 POST/PUT 必须为 `application/json`
+- **保存目录白名单**：API 新建任务与「连文件删除」只允许默认下载目录及设置中配置的白名单目录；JSON 导入时白名单外的目录会收敛为默认下载目录
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/v1/ping` | 健康检查 |
+| GET | `/api/v1/ping` | 健康检查（免令牌） |
 | GET | `/api/v1/tasks` | 任务列表（含实时进度） |
 | POST | `/api/v1/tasks` | 新建任务，body：`{"url": "...", "saveDir": "...", "connections": 8, "fileName": "自定义文件名", "checksumAlgo": "sha256", "checksumExpected": "...", "priority": 1, "startAt": "RFC3339", "speedLimit": 0}`（除 url 外均可省略） |
 | POST | `/api/v1/tasks/{id}/pause` | 暂停 |
 | POST | `/api/v1/tasks/{id}/continue` | 恢复 |
-| DELETE | `/api/v1/tasks/{id}` | 删除记录；加 `?files=1` 连同已下载文件一起删除 |
+| DELETE | `/api/v1/tasks/{id}` | 删除记录；加 `?files=1` 连同已下载文件一起删除（目录须在白名单内） |
 | GET | `/api/v1/settings` | 读取设置 |
-| PUT | `/api/v1/settings` | 保存设置（代理/限速/关闭行为等即时生效，API 端口除外） |
+| PUT | `/api/v1/settings` | 保存设置（代理/限速/API 启停等即时生效） |
 
-示例：
+示例（`<token>` 见设置页）：
 
 ```sh
+curl -H "X-API-Token: <token>" http://127.0.0.1:8199/api/v1/tasks
+
 curl -X POST http://127.0.0.1:8199/api/v1/tasks \
+  -H "X-API-Token: <token>" \
   -H "Content-Type: application/json" \
   -d '{"url": "https://example.com/bigfile.zip"}'
 
-curl -X DELETE "http://127.0.0.1:8199/api/v1/tasks/<id>?files=1"
+curl -X DELETE "http://127.0.0.1:8199/api/v1/tasks/<id>?files=1" \
+  -H "X-API-Token: <token>"
 ```
+
+### 设置生效时机
+
+| 设置项 | 生效时机 |
+|---|---|
+| 代理 / User-Agent / 自定义请求头 / 镜像模板 / 全局限速 | 保存后即时生效（对新建任务；运行中的任务沿用其开始时的快照，避免同一文件的不同分段走不同出口） |
+| API 开关 / 端口 | 保存后立即启停，无需重启 |
+| 连接数 / 每任务限速 / 优先级 / 定时 | 对新建或下一轮运行的任务生效 |
 
 ## 开发
 
@@ -85,10 +106,13 @@ curl -X DELETE "http://127.0.0.1:8199/api/v1/tasks/<id>?files=1"
 
 ```sh
 go test ./engine/ -race    # 引擎单元测试 + 集成测试（含竞态检测）
+go vet ./...               # 静态检查（CI 同款）
 cd frontend && npm test    # 前端单元测试（vitest）
 wails dev                  # 开发模式（前端热更新）
 wails build                # 构建单文件 exe 到 build/bin/
 ```
+
+CI（`.github/workflows/ci.yml`）：后端 gofmt/vet/`go test -race`，前端 vitest 与 tsc 构建，并在 Windows 上完成 `go build` 验证嵌入产物完整性。
 
 Windows 构建注意：若上级目录存在引用缺失模块的 `go.work`，可设 `GOWORK=off` 再执行 `wails build`，避免 workspace 干扰。
 
@@ -100,17 +124,18 @@ Windows 构建注意：若上级目录存在引用缺失模块的 `go.work`，�
 
 ```
 main.go                  Wails 应用入口：窗口、单实例锁、OnShutdown 强制收尾
-app.go                   前端绑定（任务/设置/打开目录/关闭行为/导入导出）
+app.go                   前端绑定（任务/设置/打开目录/关闭行为/导入导出）与 REST API 装配
 app_tray.go              系统托盘（fyne.io/systray）；退出时 systray.Quit + 进程收尾
 app_notify.go            系统通知（按设置：创建/暂停/完成/失败；原子缓存开关）
 app_clipboard.go         剪贴板监听
+sysaction/               全部完成后的系统动作（开目录/关机/睡眠/退出信号）；动作取值的唯一定义处
 engine/                  下载引擎（与 UI 解耦，可独立复用，仅标准库依赖）
+  events.go              类型化事件契约（EventName 常量 + Event 载荷）
+  errors.go              哨兵错误（ErrTaskNotFound / ErrInvalidState）
   manager.go             任务队列、优先级调度、定时唤醒、事件推送、设置应用
   download.go            分段下载、字节级续传、重试、落盘改名
   importexport.go        任务列表 JSON 导出/导入
-  aftercomplete.go       全部完成后的系统动作（开目录/关机/睡眠/退出信号）
   checksum.go            MD5/SHA1/SHA256 摘要计算与校验
-  api.go                 本地 REST API
   ratelimit.go           全局限速 + 每任务限速（令牌匀速累积）
   mirror.go              GitHub 镜像 URL 改写
   probe.go               URL 探测（大小/Range 支持/文件名推断）
@@ -118,6 +143,9 @@ engine/                  下载引擎（与 UI 解耦，可独立复用，仅标
   chunk.go               Range 分片计算
   sidecar.go             续传状态模型（分段位图 + 段内已收字节）
   store.go               设置与任务持久化（原子写 JSON，Windows 重试）
+  api/                   本地 REST API（独立子包，反向依赖 engine 类型）
+    server.go            服务生命周期：Sync 按设置启停/换端口
+    handler.go           路由与鉴权守卫（回环 Host/Origin/令牌/Content-Type）
 frontend/src             React + TypeScript 界面
   components/            任务列表、新建对话框、设置页、删除/关闭确认对话框、SVG 图标
   lib/format.ts          字节/速度/耗时格式化、URL 解析与序列号展开
