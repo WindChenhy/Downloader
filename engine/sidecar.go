@@ -6,7 +6,7 @@ import (
 )
 
 // Sidecar 记录单个任务的断点续传状态，保存在应用数据目录 state/<taskID>.json。
-// 数据本体写在 <saveDir>/<fileName>.part，全部完成后才改名为正式文件。
+// 数据本体写在统一暂存目录的 <taskID>.part，全部完成后才移动为正式文件。
 type Sidecar struct {
 	URL          string         `json:"url"`
 	TotalSize    int64          `json:"totalSize"`

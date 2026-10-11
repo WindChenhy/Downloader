@@ -3,6 +3,7 @@ import {useCallback, useEffect, useState} from 'react';
 import {EventsOn} from '../wailsjs/runtime/runtime';
 
 import type {Settings, Task, ThemeMode} from './types';
+import {resolveLang, t, useI18n} from './i18n';
 import {api} from './api';
 import TaskList from './components/TaskList';
 import AddTaskDialog from './components/AddTaskDialog';
@@ -16,6 +17,7 @@ function loadTheme(): ThemeMode {
 }
 
 export default function App() {
+  const {t, langPref, setLang} = useI18n();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [view, setView] = useState<'list' | 'settings'>('list');
@@ -46,25 +48,41 @@ export default function App() {
     localStorage.setItem('accent', accent);
   }, [accent]);
 
+  // 语言同步：把解析后的具体语言写入引擎设置，供系统通知与托盘菜单使用
+  useEffect(() => {
+    if (!settings) return;
+    const resolved = resolveLang(langPref);
+    if ((settings.language ?? 'zh-CN') !== resolved) {
+      api.saveSettings({...settings, language: resolved})
+        .then(() => api.getSettings())
+        .then(setSettings)
+        .catch(() => {});
+    }
+  }, [settings, langPref]);
+
   useEffect(() => {
     refresh();
     api.getSettings().then(setSettings).catch(() => {});
-    // 引擎每 500ms 推送一次任务快照
-    EventsOn('tasks:changed', (data: Task[]) => {
-      if (Array.isArray(data)) setTasks(data);
-    });
-    // 剪贴板监听到新链接 → 弹出预填好的新建下载
-    EventsOn('clipboard:url', (url: string) => {
-      if (typeof url === 'string' && url) {
-        setView('list');
-        setPrefillUrl(url);
-        setShowDialog(true);
-      }
-    });
-    // 后端点击关闭且设置为「每次询问」时弹出确认框
-    EventsOn('app:confirm-close', () => {
-      setShowCloseConfirm(true);
-    });
+    // 引擎每 500ms 推送一次任务快照；EventsOn 返回退订函数，
+    // 卸载时必须退订，否则 StrictMode 双挂载下监听器成对泄漏
+    const unsubscribers = [
+      EventsOn('tasks:changed', (data: Task[]) => {
+        if (Array.isArray(data)) setTasks(data);
+      }),
+      // 剪贴板监听到新链接 → 弹出预填好的新建下载
+      EventsOn('clipboard:url', (url: string) => {
+        if (typeof url === 'string' && url) {
+          setView('list');
+          setPrefillUrl(url);
+          setShowDialog(true);
+        }
+      }),
+      // 后端点击关闭且设置为「每次询问」时弹出确认框
+      EventsOn('app:confirm-close', () => {
+        setShowCloseConfirm(true);
+      }),
+    ];
+    return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
   }, [refresh]);
 
   const cycleTheme = () =>
@@ -77,27 +95,27 @@ export default function App() {
           <div className="brand-mark">⇣</div>
           <div className="brand-text">
             <span className="brand-name">Downloader</span>
-            <span className="brand-sub">多线程下载工具</span>
+            <span className="brand-sub">{t('多线程下载工具')}</span>
           </div>
         </div>
         <div className="titlebar-actions">
           <button
             className="btn icon ghost theme-btn"
-            title={theme === 'light' ? '浅色' : theme === 'dark' ? '深色' : '跟随系统'}
+            title={theme === 'light' ? t('浅色') : theme === 'dark' ? t('深色') : t('跟随系统')}
             onClick={cycleTheme}
           >
             {theme === 'light' ? <SunIcon size={16} /> : theme === 'dark' ? <MoonIcon size={16} /> : <MonitorIcon size={16} />}
           </button>
           <button
             className={`btn icon ghost ${view === 'settings' ? 'active' : ''}`}
-            title="设置"
+            title={t('设置')}
             onClick={() => setView(view === 'settings' ? 'list' : 'settings')}
           >
             <GearIcon size={16} />
           </button>
           <button
             className="btn icon primary"
-            title="新建下载"
+            title={t('新建下载')}
             onClick={() => { setPrefillUrl(''); setShowDialog(true); }}
           >
             <PlusIcon size={16} />
@@ -111,6 +129,8 @@ export default function App() {
             settings={settings}
             theme={theme}
             accent={accent}
+            langPref={langPref}
+            onLangPref={setLang}
             onTheme={setTheme}
             onAccent={setAccent}
             onSaved={setSettings}

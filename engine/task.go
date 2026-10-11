@@ -1,6 +1,10 @@
 package engine
 
-import "time"
+import (
+	"time"
+
+	"downloader/sysaction"
+)
 
 // Status 任务状态机：
 // queued → running → completed | failed | paused
@@ -23,12 +27,13 @@ const (
 )
 
 // AfterCompleteAction 全部下载结束后的动作（设置级）。
+// 取值定义在 sysaction 包（动作的执行方），此处引用保持单一来源。
 const (
-	AfterCompleteNone     = "none"
-	AfterCompleteOpenDir  = "open_dir"
-	AfterCompleteShutdown = "shutdown"
-	AfterCompleteSleep    = "sleep"
-	AfterCompleteExitApp  = "exit_app"
+	AfterCompleteNone     = sysaction.None
+	AfterCompleteOpenDir  = sysaction.OpenDir
+	AfterCompleteShutdown = sysaction.Shutdown
+	AfterCompleteSleep    = sysaction.Sleep
+	AfterCompleteExitApp  = sysaction.ExitApp
 )
 
 // Task 下载任务。Speed 字段由 Manager 的进度循环实时填充，不持久化。

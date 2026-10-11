@@ -175,7 +175,8 @@ func parseFilenameFromCD(h string) string {
 	return ""
 }
 
-// decodeRFC5987 解析 charset''percent-encoded 形式，如 UTF-8''%E4%B8%AD.zip
+// decodeRFC5987 解析 RFC 5987 扩展参数值：charset、两个单引号、百分号编码
+// 依次相连的形式，如 UTF-8 前缀的 %E4%B8%AD.zip。
 func decodeRFC5987(v string) string {
 	charset, rest, ok := strings.Cut(v, "''")
 	if !ok {
@@ -219,7 +220,21 @@ func fileNameFromURL(u *url.URL) string {
 
 var invalidChars = `<>:"/\|?*`
 
-// sanitizeFileName 去掉 Windows 非法字符与控制字符。
+// windowsReservedDevices Windows 保留设备名（不区分大小写，可带扩展名）。
+var windowsReservedDevices = func() map[string]bool {
+	names := []string{"CON", "PRN", "AUX", "NUL"}
+	for i := 1; i <= 9; i++ {
+		names = append(names, fmt.Sprintf("COM%d", i), fmt.Sprintf("LPT%d", i))
+	}
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		set[n] = true
+	}
+	return set
+}()
+
+// sanitizeFileName 去掉 Windows 非法字符与控制字符，并规避保留设备名
+// （CON、NUL、COM1 等：不处理会导致创建失败甚至写入设备）。
 func sanitizeFileName(name string) string {
 	name = strings.Map(func(r rune) rune {
 		if r < 0x20 || strings.ContainsRune(invalidChars, r) {
@@ -231,6 +246,19 @@ func sanitizeFileName(name string) string {
 	name = strings.Trim(name, ".")
 	if name == "" {
 		return ""
+	}
+	// 保留名按首个点之前的主名判断：CON.txt 同样命中
+	if stem := name; stem != "" {
+		if i := strings.IndexByte(stem, '.'); i >= 0 {
+			stem = stem[:i]
+		}
+		if windowsReservedDevices[strings.ToUpper(stem)] {
+			if i := strings.IndexByte(name, '.'); i >= 0 {
+				name = name[:i] + "_" + name[i:]
+			} else {
+				name += "_"
+			}
+		}
 	}
 	if len(name) > 150 {
 		name = name[:150]

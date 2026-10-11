@@ -5,10 +5,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -88,22 +90,28 @@ type DirCategory struct {
 
 // Settings 全局设置。
 type Settings struct {
-	SaveDir         string        `json:"saveDir"`
-	Connections     int           `json:"connections"`
-	ConcurrentTasks int           `json:"concurrentTasks"`
-	SpeedLimit      int64         `json:"speedLimit"`     // 全局下载限速，字节/秒，0 不限
-	UserAgent       string        `json:"userAgent"`      // 空 = 内置默认 UA
-	ExtraHeaders    string        `json:"extraHeaders"`   // 自定义请求头，每行一条 "Key: Value"
-	ProxyMode       string        `json:"proxyMode"`      // none | system | custom
-	ProxyURL        string        `json:"proxyUrl"`       // custom 模式生效，如 http://127.0.0.1:7890
-	GitHubMirror    bool          `json:"githubMirror"`   // GitHub 链接自动走镜像加速
-	MirrorTemplate  string        `json:"mirrorTemplate"` // 镜像模板，{url} 为原始链接
-	ClipboardWatch  bool          `json:"clipboardWatch"` // 剪贴板监听
-	APIEnabled      bool          `json:"apiEnabled"`     // 本地 REST API
-	APIPort         int           `json:"apiPort"`
-	CloseAction     string        `json:"closeAction"`   // ask | exit | minimize
-	DirCategories   []DirCategory `json:"dirCategories"` // 下载目录分类
-	AutoExtract     bool          `json:"autoExtract"`   // 下载完成后自动解压压缩包
+	SaveDir         string `json:"saveDir"`
+	Connections     int    `json:"connections"`
+	ConcurrentTasks int    `json:"concurrentTasks"`
+	SpeedLimit      int64  `json:"speedLimit"`     // 全局下载限速，字节/秒，0 不限
+	UserAgent       string `json:"userAgent"`      // 空 = 内置默认 UA
+	ExtraHeaders    string `json:"extraHeaders"`   // 自定义请求头，每行一条 "Key: Value"
+	ProxyMode       string `json:"proxyMode"`      // none | system | custom
+	ProxyURL        string `json:"proxyUrl"`       // custom 模式生效，如 http://127.0.0.1:7890
+	GitHubMirror    bool   `json:"githubMirror"`   // GitHub 链接自动走镜像加速
+	MirrorTemplate  string `json:"mirrorTemplate"` // 镜像模板，{url} 为原始链接
+	ClipboardWatch  bool   `json:"clipboardWatch"` // 剪贴板监听
+	APIEnabled      bool   `json:"apiEnabled"`     // 本地 REST API
+	APIPort         int    `json:"apiPort"`
+	// REST API 访问令牌（X-API-Token / Bearer）；由应用自动生成，
+	// 保存设置时若留空则保留现有值，不经表单清空
+	APIToken string `json:"apiToken,omitempty"`
+	// API/导入允许的保存目录白名单（默认下载目录始终允许）；
+	// 空 = 仅默认下载目录。用于阻断经接口向任意目录写/删文件
+	AllowSaveDirs []string      `json:"allowSaveDirs,omitempty"`
+	CloseAction   string        `json:"closeAction"`   // ask | exit | minimize
+	DirCategories []DirCategory `json:"dirCategories"` // 下载目录分类
+	AutoExtract   bool          `json:"autoExtract"`   // 下载完成后自动解压压缩包
 	// 系统通知：完成/失败默认开，创建/暂停默认关，均可配置
 	NotifyOnCreate   bool `json:"notifyOnCreate"`
 	NotifyOnPause    bool `json:"notifyOnPause"`
@@ -111,6 +119,9 @@ type Settings struct {
 	NotifyOnFail     bool `json:"notifyOnFail"`
 	// AfterComplete 全部任务结束后的动作
 	AfterComplete string `json:"afterComplete"`
+	// Language 界面语言（zh-CN / en-US）：由前端解析"跟随系统"后同步而来，
+	// 供系统通知与托盘菜单使用
+	Language string `json:"language"`
 }
 
 func defaultSaveDir() string {
@@ -191,6 +202,20 @@ func (s *Settings) normalize() {
 	if s.APIEnabled && s.APIPort == 0 {
 		s.APIPort = DefaultAPIPort
 	}
+	// 目录白名单：逐项清洗，去掉空白与退化项
+	if len(s.AllowSaveDirs) > 0 {
+		out := make([]string, 0, len(s.AllowSaveDirs))
+		for _, d := range s.AllowSaveDirs {
+			d = filepath.Clean(strings.TrimSpace(d))
+			if d != "" && d != "." {
+				out = append(out, d)
+			}
+		}
+		if len(out) == 0 {
+			out = nil
+		}
+		s.AllowSaveDirs = out
+	}
 	// 关闭行为：非法值回落为询问；默认绝不是最小化
 	switch s.CloseAction {
 	case CloseActionExit, CloseActionMinimize:
@@ -201,6 +226,12 @@ func (s *Settings) normalize() {
 	case AfterCompleteOpenDir, AfterCompleteShutdown, AfterCompleteSleep, AfterCompleteExitApp:
 	default:
 		s.AfterComplete = AfterCompleteNone
+	}
+	// 界面语言：非法值回落为中文
+	switch s.Language {
+	case "en-US":
+	default:
+		s.Language = "zh-CN"
 	}
 	// 目录分类：去掉空白项，名称去重（同名后者覆盖路径）
 	if s.DirCategories == nil {
@@ -281,10 +312,13 @@ func (s *Store) SaveTasks(tasks []Task) error {
 	return writeJSONAtomic(s.TasksPath(), tasks)
 }
 
+var idCounter atomic.Uint32
+
 func newID() string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return time.Now().Format("20060102150405") // 兜底：随机源不可用时退化为时间戳
+		// 兜底：随机源不可用时用 时间戳+进程号+进程内计数，避免同秒并发创建撞键
+		return fmt.Sprintf("%s-%d-%08x", time.Now().Format("20060102150405"), os.Getpid(), idCounter.Add(1))
 	}
 	return hex.EncodeToString(b[:])
 }

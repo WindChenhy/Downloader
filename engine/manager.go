@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,7 +24,37 @@ type taskHandle struct {
 	base         int64         // 本轮起点（续传时为已完成字节数），mu 保护
 	prev         int64         // 速度计算的上一次快照，mu 保护
 	prevAt       time.Time
-	runStartedAt time.Time // 本轮运行开始时刻；零值表示当前未在下载，mu 保护
+	runStartedAt time.Time    // 本轮运行开始时刻；零值表示当前未在下载，mu 保护
+	limiter      *rateLimiter // 本轮运行的每任务限速器；mu 保护，非运行期为 nil
+}
+
+// runningView 填充运行中任务的实时进度快照（展示用）。
+// settleSpeed 为 true 时同时结算瞬时速度并推进采样点（仅进度循环使用，
+// 快照路径不能推进，否则速度恒为 0）。调用方须持有 mu。
+func (h *taskHandle) runningView(now time.Time, settleSpeed bool) Task {
+	t := h.task
+	d := h.base + h.live.Load()
+	if t.TotalSize > 0 && d > t.TotalSize {
+		d = t.TotalSize
+	}
+	if settleSpeed {
+		if dt := now.Sub(h.prevAt).Seconds(); dt > 0 {
+			sp := int64(float64(d-h.prev) / dt)
+			if sp < 0 {
+				sp = 0
+			}
+			t.Speed = sp
+		}
+		h.prev = d
+		h.prevAt = now
+	}
+	t.Downloaded = d
+	// 展示用：把本轮尚未结算的活跃时长并入快照
+	if !h.runStartedAt.IsZero() {
+		t.ActiveMs += now.Sub(h.runStartedAt).Milliseconds()
+	}
+	t.AvgSpeed = avgSpeedOf(t.Downloaded, t.ActiveMs)
+	return t
 }
 
 // Manager 管理全部下载任务：排队、并发控制、持久化与事件通知。
@@ -31,7 +62,11 @@ type taskHandle struct {
 type Manager struct {
 	store  *Store
 	client *http.Client
-	notify func(name string, data ...interface{})
+	notify func(Event)
+	// now 时间源；测试可经 WithClock 注入假时钟
+	now func() time.Time
+
+	stagingRoot string // 下载暂存目录（分块 .part 所在），运行期只读
 
 	mu       sync.Mutex
 	settings Settings
@@ -43,27 +78,67 @@ type Manager struct {
 	queueIdleFired bool
 }
 
+// Option 定制 Manager 的可选依赖。
+type Option func(*Manager)
+
+// WithHTTPClient 注入自定义 HTTP 客户端（测试时替换为 httptest/fake 用）。
+// 为 nil 时忽略；保存设置后仍会按设置重建客户端。
+func WithHTTPClient(c *http.Client) Option {
+	return func(m *Manager) {
+		if c != nil {
+			m.client = c
+		}
+	}
+}
+
+// WithClock 注入时间源（测试用假时钟）；为 nil 时忽略。
+// 影响调度判定、进度采样与各时间戳；不影响限速器与 progressLoop 的 tick 频率。
+func WithClock(now func() time.Time) Option {
+	return func(m *Manager) {
+		if now != nil {
+			m.now = now
+		}
+	}
+}
+
+// WithStagingDir 覆盖下载暂存目录。默认 <数据目录>/staging；应用层传入
+// 系统本地应用数据目录（Windows = %LOCALAPPDATA%\downloader\staging），
+// 使下载中的分块文件不出现在下载目录里，完成时才移动过去。
+func WithStagingDir(dir string) Option {
+	return func(m *Manager) {
+		if strings.TrimSpace(dir) != "" {
+			m.stagingRoot = dir
+		}
+	}
+}
+
 // NewManager 创建管理器并加载磁盘上的任务与设置。
 // 上次退出时仍在运行的任务一律视为暂停；排队中的任务自动继续排队。
-func NewManager(dataDir string, notify func(name string, data ...interface{})) (*Manager, error) {
+// 可通过 Option 注入依赖（如 WithHTTPClient / WithClock）。
+func NewManager(dataDir string, notify func(Event), opts ...Option) (*Manager, error) {
 	store := NewStore(dataDir)
 	settings, err := store.LoadSettings()
 	if err != nil {
 		return nil, err
 	}
 	m := &Manager{
-		store:    store,
-		client:   buildHTTPClient(settings),
-		notify:   notify,
-		settings: settings,
-		handles:  make(map[string]*taskHandle),
-		limiter:  newRateLimiter(settings.SpeedLimit),
+		store:       store,
+		client:      buildHTTPClient(settings),
+		notify:      notify,
+		now:         time.Now,
+		settings:    settings,
+		handles:     make(map[string]*taskHandle),
+		limiter:     newRateLimiter(settings.SpeedLimit),
+		stagingRoot: filepath.Join(dataDir, "staging"),
+	}
+	for _, opt := range opts {
+		opt(m)
 	}
 	tasks, err := store.LoadTasks()
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now()
+	now := m.now()
 	for _, t := range tasks {
 		if t.Status == StatusRunning {
 			t.Status = StatusPaused
@@ -72,13 +147,30 @@ func NewManager(dataDir string, notify func(name string, data ...interface{})) (
 		m.handles[t.ID] = &taskHandle{task: t, done: make(chan struct{}), prevAt: now}
 		m.order = append(m.order, t.ID)
 	}
-	m.persistTasksLocked()
 	m.mu.Lock()
+	m.persistTasksLocked()
 	m.cleanupOrphanStagingLocked()
 	m.dispatchLocked()
 	m.mu.Unlock()
+	// API 开启时确保存在访问令牌（首次运行生成并持久化）
+	if m.settings.APIEnabled && strings.TrimSpace(m.settings.APIToken) == "" {
+		m.settings.APIToken = newID()
+		if err := m.store.SaveSettings(m.settings); err != nil {
+			fmt.Fprintln(os.Stderr, "保存 API 令牌失败:", err)
+		}
+	}
 	go m.progressLoop()
 	return m, nil
+}
+
+// emitTasks 推送任务列表快照事件。
+func (m *Manager) emitTasks(tasks []Task) {
+	m.notify(Event{Name: EventTasksChanged, Tasks: tasks})
+}
+
+// emitTask 推送单任务事件。
+func (m *Manager) emitTask(name EventName, t Task) {
+	m.notify(Event{Name: name, Task: t})
 }
 
 // AddTaskParams 新建任务参数；批量与单条共用。
@@ -128,8 +220,8 @@ func (m *Manager) AddTaskWithChecksum(p AddTaskParams) (Task, error) {
 		return Task{}, err
 	}
 	// 事件必须在解锁后发出：回调可能再次进入 Manager（如 GetSettings）
-	m.notify("tasks:changed", snap)
-	m.notify("task:created", t)
+	m.emitTasks(snap)
+	m.emitTask(EventTaskCreated, t)
 	return t, nil
 }
 
@@ -214,7 +306,7 @@ func (m *Manager) addTaskLocked(u *url.URL, p AddTaskParams) (Task, error) {
 		SaveDir:          abs,
 		Status:           StatusQueued,
 		Connections:      connections,
-		CreatedAt:        time.Now(),
+		CreatedAt:        m.now(),
 		ChecksumAlgo:     algo,
 		ChecksumExpected: strings.ToLower(strings.TrimSpace(p.ChecksumExpected)),
 		Priority:         prio,
@@ -235,7 +327,7 @@ func (m *Manager) PauseTask(id string) error {
 	h, ok := m.handles[id]
 	if !ok {
 		m.mu.Unlock()
-		return fmt.Errorf("任务不存在")
+		return ErrTaskNotFound
 	}
 	var (
 		t           Task
@@ -256,8 +348,8 @@ func (m *Manager) PauseTask(id string) error {
 	}
 	m.mu.Unlock()
 	if notifyPause {
-		m.notify("tasks:changed", notifySnap)
-		m.notify("task:paused", t)
+		m.emitTasks(notifySnap)
+		m.emitTask(EventTaskPaused, t)
 	}
 	return nil
 }
@@ -268,12 +360,12 @@ func (m *Manager) ResumeTask(id string) error {
 	h, ok := m.handles[id]
 	if !ok {
 		m.mu.Unlock()
-		return fmt.Errorf("任务不存在")
+		return ErrTaskNotFound
 	}
 	if h.task.Status != StatusPaused && h.task.Status != StatusFailed {
 		status := h.task.Status
 		m.mu.Unlock()
-		return fmt.Errorf("当前状态不可恢复: %s", status)
+		return fmt.Errorf("%w: %s", ErrInvalidState, status)
 	}
 	h.task.Status = StatusQueued
 	h.task.Error = ""
@@ -281,7 +373,7 @@ func (m *Manager) ResumeTask(id string) error {
 	m.persistTasksLocked()
 	snap := m.snapshotLocked()
 	m.mu.Unlock()
-	m.notify("tasks:changed", snap)
+	m.emitTasks(snap)
 	return nil
 }
 
@@ -294,14 +386,14 @@ func (m *Manager) SetTaskPriority(id string, priority int) error {
 	h, ok := m.handles[id]
 	if !ok {
 		m.mu.Unlock()
-		return fmt.Errorf("任务不存在")
+		return ErrTaskNotFound
 	}
 	h.task.Priority = priority
 	m.dispatchLocked()
 	m.persistTasksLocked()
 	snap := m.snapshotLocked()
 	m.mu.Unlock()
-	m.notify("tasks:changed", snap)
+	m.emitTasks(snap)
 	return nil
 }
 
@@ -320,7 +412,7 @@ func (m *Manager) MoveTask(id string, delta int) error {
 	}
 	if idx < 0 {
 		m.mu.Unlock()
-		return fmt.Errorf("任务不存在")
+		return ErrTaskNotFound
 	}
 	j := idx + delta
 	if j < 0 || j >= len(m.order) {
@@ -331,11 +423,12 @@ func (m *Manager) MoveTask(id string, delta int) error {
 	m.persistTasksLocked()
 	snap := m.snapshotLocked()
 	m.mu.Unlock()
-	m.notify("tasks:changed", snap)
+	m.emitTasks(snap)
 	return nil
 }
 
 // SetTaskSpeedLimit 设置每任务限速（字节/秒，0 跟随全局）。
+// 对运行中的任务立即生效（调整其限速器），对排队任务在下一轮运行生效。
 func (m *Manager) SetTaskSpeedLimit(id string, limit int64) error {
 	if limit < 0 {
 		limit = 0
@@ -344,13 +437,16 @@ func (m *Manager) SetTaskSpeedLimit(id string, limit int64) error {
 	h, ok := m.handles[id]
 	if !ok {
 		m.mu.Unlock()
-		return fmt.Errorf("任务不存在")
+		return ErrTaskNotFound
 	}
 	h.task.SpeedLimit = limit
+	if h.limiter != nil {
+		h.limiter.SetLimit(limit) // 0 = 不限，运行中的下载立即放开
+	}
 	m.persistTasksLocked()
 	snap := m.snapshotLocked()
 	m.mu.Unlock()
-	m.notify("tasks:changed", snap)
+	m.emitTasks(snap)
 	return nil
 }
 
@@ -360,7 +456,7 @@ func (m *Manager) SetTaskStartAt(id string, startAtRFC3339 string) error {
 	if s := strings.TrimSpace(startAtRFC3339); s != "" {
 		parsed, err := time.Parse(time.RFC3339, s)
 		if err != nil {
-			return fmt.Errorf("无效时间: %v", err)
+			return fmt.Errorf("无效时间: %w", err)
 		}
 		ts = parsed
 	}
@@ -368,14 +464,14 @@ func (m *Manager) SetTaskStartAt(id string, startAtRFC3339 string) error {
 	h, ok := m.handles[id]
 	if !ok {
 		m.mu.Unlock()
-		return fmt.Errorf("任务不存在")
+		return ErrTaskNotFound
 	}
 	h.task.StartAt = ts
 	m.dispatchLocked()
 	m.persistTasksLocked()
 	snap := m.snapshotLocked()
 	m.mu.Unlock()
-	m.notify("tasks:changed", snap)
+	m.emitTasks(snap)
 	return nil
 }
 
@@ -386,16 +482,19 @@ func (m *Manager) RemoveTask(id string, deleteFiles bool) error {
 	h, ok := m.handles[id]
 	if !ok {
 		m.mu.Unlock()
-		return fmt.Errorf("任务不存在")
+		return ErrTaskNotFound
 	}
 	running := h.task.Status == StatusRunning
 	if h.cancel != nil {
 		h.cancel()
 	}
 	if running {
+		// 锁内捕获本轮 done：等待期间任务可能被 ResumeTask 重新出队并
+		// 换上新的 done，拿到旧引用才能确认被删除的这一轮已经退出
+		done := h.done
 		m.mu.Unlock()
 		select {
-		case <-h.done:
+		case <-done:
 		case <-time.After(5 * time.Second):
 		}
 		m.mu.Lock()
@@ -411,16 +510,16 @@ func (m *Manager) RemoveTask(id string, deleteFiles bool) error {
 	m.persistTasksLocked()
 	snap := m.snapshotLocked()
 	m.mu.Unlock()
-	m.notify("tasks:changed", snap)
+	m.emitTasks(snap)
 
-	// 未完成的暂存数据（.downloader/<任务ID>.part）随记录一起清理；
+	// 未完成的暂存数据（<暂存目录>/<任务ID>.part）随记录一起清理；
 	// 正式文件是否删除由 deleteFiles 决定
-	_ = os.Remove(m.stagingPath(t.SaveDir, t.ID))
+	_ = os.Remove(m.stagingPath(t.ID))
 	if deleteFiles {
 		_ = os.Remove(filepath.Join(t.SaveDir, t.FileName))
 	}
 	_ = os.Remove(m.store.StatePath(id))
-	_ = os.Remove(m.stagingDir(t.SaveDir)) // 暂存目录已空则一并移除
+	_ = os.Remove(m.stagingDir()) // 暂存目录已空则一并移除
 	return nil
 }
 
@@ -438,9 +537,21 @@ func (m *Manager) GetSettings() Settings {
 	return m.settings
 }
 
-// SaveSettings 持久化并应用设置（代理/UA/全局限速即时生效）。
+// SaveSettings 持久化并应用设置。
+// 即时生效：代理/UA/自定义请求头/镜像/全局限速/通知开关，以及本地 REST API 的启停与端口。
+// 对下一轮任务生效：连接数、每任务限速（运行中的任务沿用其开始时的快照）。
 func (m *Manager) SaveSettings(s Settings) error {
 	s.normalize()
+	m.mu.Lock()
+	// 客户端未回传令牌时保留现有值：令牌由应用生成管理，不随表单清空
+	if strings.TrimSpace(s.APIToken) == "" {
+		s.APIToken = m.settings.APIToken
+	}
+	// 运行中开启 API 且从未生成过令牌（首启时 API 关闭不会生成）→ 现在补发
+	if s.APIEnabled && strings.TrimSpace(s.APIToken) == "" {
+		s.APIToken = newID()
+	}
+	m.mu.Unlock()
 	if err := m.store.SaveSettings(s); err != nil {
 		return err
 	}
@@ -474,7 +585,7 @@ func (m *Manager) HasTaskWithURL(rawURL string) bool {
 // dispatchLocked 启动排队任务直到占满并发额度。调用方须持有 mu。
 // 出队顺序：优先级高者先，同级按创建顺序；未到 StartAt 的定时任务跳过。
 func (m *Manager) dispatchLocked() {
-	now := time.Now()
+	now := m.now()
 	for m.running < m.settings.ConcurrentTasks {
 		var nextID string
 		bestPrio := -1
@@ -502,14 +613,16 @@ func (m *Manager) dispatchLocked() {
 		h.base = h.task.Downloaded
 		h.live.Store(0)
 		h.prev = h.task.Downloaded
-		h.prevAt = time.Now()
-		h.runStartedAt = time.Now() // 活跃下载耗时从本轮开始累计
+		h.prevAt = now
+		h.runStartedAt = now // 活跃下载耗时从本轮开始累计
+		// 每任务限速器按本轮开始的值创建；运行中可用 SetTaskSpeedLimit 调整
+		h.limiter = newRateLimiter(h.task.SpeedLimit)
 		m.running++
 
 		ctx, cancel := context.WithCancel(context.Background())
 		h.cancel = cancel
 		h.done = make(chan struct{}) // 每轮运行一个新 done，上一轮的已被关闭
-		r := &taskRunner{m: m, h: h, task: h.task, cancel: cancel}
+		r := &taskRunner{m: m, h: h, task: h.task, cancel: cancel, taskLimiter: h.limiter}
 		go func() {
 			err := r.run(ctx)
 			// 先关闭 done 再做收尾登记：ResumeTask 在看到 Paused 状态后
@@ -525,10 +638,11 @@ func (m *Manager) finishTask(h *taskHandle, err error) {
 	m.mu.Lock()
 	m.running--
 	h.cancel = nil
+	h.limiter = nil // 本轮限速器随运行结束作废
 	h.task.Speed = 0
 	// 结算本轮活跃下载耗时（暂停前一直在下的时间）
 	if !h.runStartedAt.IsZero() {
-		h.task.ActiveMs += time.Since(h.runStartedAt).Milliseconds()
+		h.task.ActiveMs += m.now().Sub(h.runStartedAt).Milliseconds()
 		h.runStartedAt = time.Time{}
 	}
 
@@ -539,7 +653,7 @@ func (m *Manager) finishTask(h *taskHandle, err error) {
 		if h.task.TotalSize > 0 {
 			h.task.Downloaded = h.task.TotalSize
 		}
-		h.task.FinishedAt = time.Now()
+		h.task.FinishedAt = m.now()
 		h.task.AvgSpeed = avgSpeedOf(h.task.Downloaded, h.task.ActiveMs)
 		_ = os.Remove(m.store.StatePath(h.task.ID))
 	case errors.Is(err, ErrPaused):
@@ -551,7 +665,7 @@ func (m *Manager) finishTask(h *taskHandle, err error) {
 		h.task.Status = StatusFailed
 		h.task.Error = err.Error()
 		h.task.Downloaded = m.exactDownloadedLocked(h)
-		h.task.FinishedAt = time.Now()
+		h.task.FinishedAt = m.now()
 		h.task.AvgSpeed = avgSpeedOf(h.task.Downloaded, h.task.ActiveMs)
 	}
 	t := h.task
@@ -561,14 +675,14 @@ func (m *Manager) finishTask(h *taskHandle, err error) {
 	idle := m.queueIdleLocked()
 	m.dispatchLocked()
 	m.mu.Unlock()
-	m.notify("tasks:changed", snap)
+	m.emitTasks(snap)
 	if status == StatusPaused {
-		m.notify("task:paused", t)
+		m.emitTask(EventTaskPaused, t)
 	} else {
-		m.notify("task:finished", t) // 供系统通知等上层钩子使用（完成/失败）
+		m.emitTask(EventTaskFinished, t) // 供系统通知等上层钩子使用（完成/失败）
 	}
 	if idle {
-		m.notify("queue:idle", t)
+		m.emitTask(EventQueueIdle, t)
 	}
 }
 
@@ -590,16 +704,16 @@ func (m *Manager) queueIdleLocked() bool {
 	return true
 }
 
-// stagingDir 任务的下载暂存目录：<保存目录>/.downloader。
-// 刻意放在保存目录同盘而非系统临时目录——完成后的"移动"是同盘原地
-// 改名（瞬时）；放系统盘会导致跨盘改名退化为整文件复制。
-// 点前缀命名避免被用户顺手误删，下载中的数据不再散落在下载目录里。
-func (m *Manager) stagingDir(saveDir string) string {
-	return filepath.Join(saveDir, ".downloader")
+// stagingDir 下载暂存目录：应用数据目录下的 staging（应用层默认指向
+// 系统本地应用数据，Windows = %LOCALAPPDATA%\downloader\staging）。
+// 下载中的分块文件不再出现在保存目录里；完成时才移动进保存目录，
+// 同盘保存目录时仍是原地改名，跨盘则退化为一次性复制（见 download.go moveFile）。
+func (m *Manager) stagingDir() string {
+	return m.stagingRoot
 }
 
-func (m *Manager) stagingPath(saveDir, taskID string) string {
-	return filepath.Join(m.stagingDir(saveDir), taskID+".part")
+func (m *Manager) stagingPath(taskID string) string {
+	return filepath.Join(m.stagingDir(), taskID+".part")
 }
 
 // exactDownloadedLocked 从磁盘上的续传状态精确计算已下载字节数
@@ -607,7 +721,7 @@ func (m *Manager) stagingPath(saveDir, taskID string) string {
 func (m *Manager) exactDownloadedLocked(h *taskHandle) int64 {
 	if sc, err := loadSidecar(m.store.StatePath(h.task.ID)); err == nil {
 		if sc.Single {
-			if st, err := os.Stat(m.stagingPath(h.task.SaveDir, h.task.ID)); err == nil {
+			if st, err := os.Stat(m.stagingPath(h.task.ID)); err == nil {
 				return st.Size()
 			}
 			return 0
@@ -617,60 +731,65 @@ func (m *Manager) exactDownloadedLocked(h *taskHandle) int64 {
 	return h.base + h.live.Load()
 }
 
-// cleanupOrphanStagingLocked 清理各暂存目录中不再属于任何现存任务的
-// 孤儿 part 文件（任务记录被外部删除等遗留），并移除清空后的暂存目录。
+// cleanupOrphanStagingLocked 启动时的一次性暂存整理：
+//  1. 把旧版本遗留在保存目录的暂存数据迁入统一暂存目录
+//     （v0：<保存目录>/<文件名>.part；v1：<保存目录>/.downloader/<任务ID>.part）
+//  2. 移除保存目录里的旧暂存目录
+//  3. 清理统一暂存目录中不再属于任何现存任务的孤儿 part 文件
+//
 // 调用方须持有 mu；仅在启动时执行一次。
 func (m *Manager) cleanupOrphanStagingLocked() {
-	keep := map[string]map[string]bool{} // 暂存目录 -> 应保留的文件名集合
-	// 旧版本把 part 放在保存目录（<文件名>.part），迁移到暂存目录，
-	// 避免升级后已暂停任务从头重下
+	_ = os.MkdirAll(m.stagingDir(), 0o755)
 	for _, h := range m.handles {
-		legacy := filepath.Join(h.task.SaveDir, h.task.FileName+".part")
-		if _, err := os.Stat(legacy); err == nil {
-			_ = os.MkdirAll(m.stagingDir(h.task.SaveDir), 0o755)
-			_ = os.Rename(legacy, m.stagingPath(h.task.SaveDir, h.task.ID))
+		v0 := filepath.Join(h.task.SaveDir, h.task.FileName+".part")
+		if _, err := os.Stat(v0); err == nil {
+			_ = moveFile(v0, m.stagingPath(h.task.ID))
 		}
-	}
-	for _, h := range m.handles {
-		dir := m.stagingDir(h.task.SaveDir)
-		if keep[dir] == nil {
-			keep[dir] = map[string]bool{}
-		}
-		keep[dir][h.task.ID+".part"] = true
-	}
-	for dir, kept := range keep {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			continue // 目录尚不存在
-		}
-		for _, e := range entries {
-			if !kept[e.Name()] {
-				_ = os.Remove(filepath.Join(dir, e.Name()))
+		v1 := filepath.Join(h.task.SaveDir, ".downloader", h.task.ID+".part")
+		if _, err := os.Stat(v1); err == nil {
+			if _, err := os.Stat(m.stagingPath(h.task.ID)); err != nil {
+				_ = moveFile(v1, m.stagingPath(h.task.ID))
 			}
 		}
-		_ = os.Remove(dir) // 已清空则一并移除；非空则失败忽略
 	}
+	// 旧暂存目录已无要保留的数据（活任务的 part 已迁走），整目录移除；
+	// 目录里的孤儿数据也随之一并清理
+	seen := make(map[string]bool)
+	for _, h := range m.handles {
+		if seen[h.task.SaveDir] {
+			continue
+		}
+		seen[h.task.SaveDir] = true
+		_ = os.RemoveAll(filepath.Join(h.task.SaveDir, ".downloader"))
+	}
+	// 统一暂存目录内的孤儿清理（任务记录被外部删除等遗留）
+	entries, err := os.ReadDir(m.stagingDir())
+	if err != nil {
+		return
+	}
+	keep := make(map[string]bool, len(m.handles))
+	for id := range m.handles {
+		keep[id+".part"] = true
+	}
+	for _, e := range entries {
+		if !keep[e.Name()] {
+			_ = os.Remove(filepath.Join(m.stagingDir(), e.Name()))
+		}
+	}
+	_ = os.Remove(m.stagingDir()) // 已空则移除
 }
 
 func (m *Manager) snapshotLocked() []Task {
 	out := make([]Task, 0, len(m.order))
-	now := time.Now()
+	now := m.now()
 	for _, id := range m.order {
 		h := m.handles[id]
-		t := h.task
-		if t.Status == StatusRunning {
-			d := h.base + h.live.Load()
-			if t.TotalSize > 0 && d > t.TotalSize {
-				d = t.TotalSize
-			}
-			t.Downloaded = d
-			// 展示用：把本轮尚未结算的活跃时长并入快照
-			if !h.runStartedAt.IsZero() {
-				t.ActiveMs += now.Sub(h.runStartedAt).Milliseconds()
-			}
-			t.AvgSpeed = avgSpeedOf(t.Downloaded, t.ActiveMs)
+		if h.task.Status == StatusRunning {
+			// 快照只读，不推进速度采样点（由 progressLoop 结算瞬时速度）
+			out = append(out, h.runningView(now, false))
+			continue
 		}
-		out = append(out, t)
+		out = append(out, h.task)
 	}
 	return out
 }
@@ -696,35 +815,19 @@ func (m *Manager) progressLoop() {
 			m.mu.Unlock()
 			continue
 		}
-		now := time.Now()
+		now := m.now()
 		out := make([]Task, 0, len(m.order))
 		for _, id := range m.order {
 			h := m.handles[id]
-			t := h.task
-			if t.Status == StatusRunning {
-				d := h.base + h.live.Load()
-				if t.TotalSize > 0 && d > t.TotalSize {
-					d = t.TotalSize
-				}
-				if dt := now.Sub(h.prevAt).Seconds(); dt > 0 {
-					sp := int64(float64(d-h.prev) / dt)
-					if sp < 0 {
-						sp = 0
-					}
-					t.Speed = sp
-				}
-				h.prev = d
-				h.prevAt = now
-				t.Downloaded = d
-				if !h.runStartedAt.IsZero() {
-					t.ActiveMs += now.Sub(h.runStartedAt).Milliseconds()
-				}
-				t.AvgSpeed = avgSpeedOf(t.Downloaded, t.ActiveMs)
+			if h.task.Status == StatusRunning {
+				// 结算瞬时速度并推进采样点
+				out = append(out, h.runningView(now, true))
+				continue
 			}
-			out = append(out, t)
+			out = append(out, h.task)
 		}
 		m.mu.Unlock()
-		m.notify("tasks:changed", out)
+		m.emitTasks(out)
 	}
 }
 
@@ -747,4 +850,60 @@ func avgSpeedOf(downloaded, activeMs int64) int64 {
 		return 0
 	}
 	return downloaded * 1000 / activeMs
+}
+
+// SaveDirAllowed 报告目录是否为空（=使用默认目录）或落在
+// 「默认下载目录 + 设置中的白名单目录」之内。用于 REST API 新建、
+// API 删除文件、JSON 导入等"目录并非用户当面选择"的路径，
+// 阻断借接口向任意目录写文件或删文件。
+func (m *Manager) SaveDirAllowed(dir string) bool {
+	if strings.TrimSpace(dir) == "" {
+		return true // 空 = 使用默认下载目录
+	}
+	m.mu.Lock()
+	bases := make([]string, 0, 1+len(m.settings.AllowSaveDirs))
+	bases = append(bases, m.settings.SaveDir)
+	bases = append(bases, m.settings.AllowSaveDirs...)
+	m.mu.Unlock()
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return false
+	}
+	for _, b := range bases {
+		if strings.TrimSpace(b) == "" {
+			continue
+		}
+		if baseAbs, err := filepath.Abs(b); err == nil && dirWithin(abs, baseAbs) {
+			return true
+		}
+	}
+	return false
+}
+
+// TaskSaveDir 返回任务当前的保存目录；任务不存在时 ok 为 false。
+func (m *Manager) TaskSaveDir(id string) (string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	h, ok := m.handles[id]
+	if !ok {
+		return "", false
+	}
+	return h.task.SaveDir, true
+}
+
+// dirWithin 报告 path 等于 base 或位于 base 目录树下（Windows 不区分大小写）。
+func dirWithin(path, base string) bool {
+	path = filepath.Clean(path)
+	base = filepath.Clean(base)
+	if path == base {
+		return true
+	}
+	if !strings.HasSuffix(base, string(os.PathSeparator)) {
+		base += string(os.PathSeparator)
+	}
+	if runtime.GOOS == "windows" {
+		path = strings.ToLower(path)
+		base = strings.ToLower(base)
+	}
+	return strings.HasPrefix(path, base)
 }

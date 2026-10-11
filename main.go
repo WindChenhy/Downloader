@@ -16,11 +16,11 @@ func main() {
 	app := NewApp()
 
 	err := wails.Run(&options.App{
-		Title:             "Downloader - 多线程下载工具",
-		Width:             980,
-		Height:            660,
-		MinWidth:          720,
-		MinHeight:         480,
+		Title:     "Downloader - 多线程下载工具",
+		Width:     980,
+		Height:    660,
+		MinWidth:  720,
+		MinHeight: 480,
 		// 关闭行为由 OnBeforeClose 按设置决定：询问 / 直接退出 / 最小化到托盘
 		HideWindowOnClose: false,
 		AssetServer: &assetserver.Options{

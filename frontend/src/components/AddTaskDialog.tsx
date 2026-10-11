@@ -3,6 +3,7 @@ import {useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent} fro
 import type {Settings} from '../types';
 import {api} from '../api';
 import {parseAndExpandUrls} from '../lib/format';
+import {t, useI18n} from '../i18n';
 
 interface Props {
   settings: Settings;
@@ -19,6 +20,7 @@ function autoGrow(el: HTMLTextAreaElement | null) {
 }
 
 export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: Props) {
+  const {t} = useI18n();
   const [url, setUrl] = useState(initialUrl ?? '');
   const [customName, setCustomName] = useState('');
   const [saveDir, setSaveDir] = useState(settings.saveDir);
@@ -59,7 +61,7 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
 
   const submit = async () => {
     if (urls.length === 0) {
-      setError('请输入至少一条 http/https 下载链接（支持多行批量与 {1..10} 序列）');
+      setError(t('请输入至少一条 http/https 下载链接（支持多行批量与 {1..10} 序列）'));
       return;
     }
     setBusy(true);
@@ -85,7 +87,7 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
       onAdded();
       if (result.errors?.length) {
         setError(
-          `已创建 ${result.tasks?.length ?? 0} 个任务；${result.errors.length} 条失败：\n` +
+          t('已创建 {n} 个任务；{m} 条失败：\n', {n: result.tasks?.length ?? 0, m: result.errors.length}) +
             result.errors.join('\n'),
         );
         setBusy(false);
@@ -101,14 +103,14 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="dialog">
-        <h2>新建下载</h2>
+        <h2>{t('新建下载')}</h2>
         <div className="dialog-body">
         <label className="field">
           <span>
-            下载链接
+            {t('下载链接')}
             {urls.length > 0 && (
               <em style={{fontStyle: 'normal', opacity: 0.65, marginLeft: 8}}>
-                已识别 {urls.length} 条{multi ? '（批量）' : ''}
+                {t('已识别 {n} 条', {n: urls.length})}{multi ? t('（批量）') : ''}
               </em>
             )}
           </span>
@@ -117,26 +119,26 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
             autoFocus
             rows={1}
             className="field-textarea"
-            placeholder="粘贴链接；多行批量；支持序列如 https://x.com/f_{1..10}.zip"
+            placeholder={t('粘贴链接；多行批量；支持序列如 https://x.com/f_{1..10}.zip')}
             value={url}
             onChange={onUrlChange}
           />
         </label>
         <label className="field">
           <span>
-            重命名（留空自动从链接获取）
-            {multi && <em style={{fontStyle: 'normal', opacity: 0.65, marginLeft: 8}}>批量时忽略</em>}
+            {t('重命名（留空自动从链接获取）')}
+            {multi && <em style={{fontStyle: 'normal', opacity: 0.65, marginLeft: 8}}>{t('批量时忽略')}</em>}
           </span>
           <input
             type="text"
             value={customName}
-            placeholder="可选，如： ubuntu-24.04.iso"
+            placeholder={t('可选，如： ubuntu-24.04.iso')}
             disabled={multi}
             onChange={(e) => setCustomName(e.target.value)}
           />
         </label>
         <label className="field">
-          <span>目录分类</span>
+          <span>{t('目录分类')}</span>
           <select
             value={categoryIdx}
             onChange={(e) => {
@@ -148,20 +150,20 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
               }
             }}
           >
-            <option value={-1}>默认 / 自定义</option>
+            <option value={-1}>{t('默认 / 自定义')}</option>
             {(settings.dirCategories ?? []).map((c, i) => (
               <option key={i} value={i}>
-                {c.name || '未命名'}
+                {c.name || t('未命名')}
               </option>
             ))}
           </select>
         </label>
         <label className="field">
-          <span>保存到</span>
+          <span>{t('保存到')}</span>
           <input
             type="text"
             value={saveDir}
-            placeholder="下载目录"
+            placeholder={t('下载目录')}
             onChange={(e) => {
               setSaveDir(e.target.value);
               setCategoryIdx(-1);
@@ -170,7 +172,7 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
         </label>
         <div className="field-grid">
           <label className="field">
-            <span>连接数（1–128）</span>
+            <span>{t('连接数（1–128）')}</span>
             <input
               type="number"
               min={1}
@@ -180,15 +182,15 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
             />
           </label>
           <label className="field">
-            <span>优先级</span>
+            <span>{t('优先级')}</span>
             <select value={priority} onChange={(e) => setPriority(Number(e.target.value))}>
-              <option value={0}>低</option>
-              <option value={1}>普通</option>
-              <option value={2}>高</option>
+              <option value={0}>{t('低')}</option>
+              <option value={1}>{t('普通')}</option>
+              <option value={2}>{t('高')}</option>
             </select>
           </label>
           <label className="field">
-            <span>限速（KB/s，0 不限）</span>
+            <span>{t('限速（KB/s，0 不限）')}</span>
             <input
               type="number"
               min={0}
@@ -197,7 +199,7 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
             />
           </label>
           <label className="field">
-            <span>定时开始（可选）</span>
+            <span>{t('定时开始（可选）')}</span>
             <input
               type="datetime-local"
               value={startAtLocal}
@@ -208,20 +210,20 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
         {!multi && (
           <div className="field-grid">
             <label className="field">
-              <span>校验算法（可选）</span>
+              <span>{t('校验算法（可选）')}</span>
               <select value={checksumAlgo} onChange={(e) => setChecksumAlgo(e.target.value)}>
-                <option value="">不校验</option>
+                <option value="">{t('不校验')}</option>
                 <option value="md5">MD5</option>
                 <option value="sha1">SHA1</option>
                 <option value="sha256">SHA256</option>
               </select>
             </label>
             <label className="field">
-              <span>期望校验值（可选）</span>
+              <span>{t('期望校验值（可选）')}</span>
               <input
                 type="text"
                 value={checksumExpected}
-                placeholder="留空则仅计算摘要"
+                placeholder={t('留空则仅计算摘要')}
                 onChange={(e) => setChecksumExpected(e.target.value)}
               />
             </label>
@@ -231,10 +233,10 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
         {error && <div className="dialog-error" style={{whiteSpace: 'pre-wrap'}}>{error}</div>}
         <div className="dialog-actions">
           <button className="btn ghost" onClick={onClose} disabled={busy}>
-            取消
+            {t('取消')}
           </button>
           <button className="btn primary" onClick={submit} disabled={busy}>
-            {busy ? '添加中…' : multi ? `批量创建 ${urls.length} 个任务` : '开始下载'}
+            {busy ? t('添加中…') : multi ? t('批量创建 {n} 个任务', {n: urls.length}) : t('开始下载')}
           </button>
         </div>
       </div>

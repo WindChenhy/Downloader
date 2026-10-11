@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"downloader/sysaction"
 )
 
 func TestPriorityStoredAndDispatchOrder(t *testing.T) {
@@ -21,6 +23,7 @@ func TestPriorityStoredAndDispatchOrder(t *testing.T) {
 	}
 	st := m.GetSettings()
 	st.ConcurrentTasks = 1
+	st.APIEnabled = false // 测试不真正监听端口
 	if err := m.SaveSettings(st); err != nil {
 		t.Fatal(err)
 	}
@@ -123,6 +126,7 @@ func TestMoveTaskOrder(t *testing.T) {
 	m, saveDir := mustManager(t)
 	st := m.GetSettings()
 	st.ConcurrentTasks = 1
+	st.APIEnabled = false // 测试不真正监听端口
 	_ = m.SaveSettings(st)
 
 	var ids []string
@@ -216,10 +220,10 @@ func TestExportImportTasks(t *testing.T) {
 }
 
 func TestRunAfterCompleteActionUnknown(t *testing.T) {
-	if err := RunAfterCompleteAction("nope", ""); err == nil || strings.Contains(err.Error(), "exit") {
+	if err := sysaction.Run("nope", ""); err == nil || strings.Contains(err.Error(), "exit") {
 		t.Fatalf("未知动作应报错, got %v", err)
 	}
-	if err := RunAfterCompleteAction(AfterCompleteNone, ""); err != nil {
+	if err := sysaction.Run(sysaction.None, ""); err != nil {
 		t.Fatal(err)
 	}
 }

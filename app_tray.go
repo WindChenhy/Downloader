@@ -34,13 +34,19 @@ func (a *App) initTray() {
 }
 
 // onTrayReady 托盘消息循环就绪后初始化菜单与点击处理。
+// 菜单文案按当前界面语言生成；语言变更在下次启动时应用到托盘。
 func (a *App) onTrayReady() {
+	en := a.uiLanguage() == "en-US"
 	systray.SetIcon(trayIcon)
-	systray.SetTooltip("Downloader - 多线程下载工具")
+	if en {
+		systray.SetTooltip("Downloader - Multi-threaded Download Manager")
+	} else {
+		systray.SetTooltip("Downloader - 多线程下载工具")
+	}
 
-	mShow := systray.AddMenuItem("显示主窗口", "显示下载器主窗口")
+	mShow := systray.AddMenuItem(a.text("显示主窗口", "Show Main Window"), a.text("显示下载器主窗口", "Show the main window"))
 	systray.AddSeparator()
-	mQuit := systray.AddMenuItem("退出", "退出程序")
+	mQuit := systray.AddMenuItem(a.text("退出", "Quit"), a.text("退出程序", "Quit the application"))
 
 	go func() {
 		for {

@@ -39,10 +39,10 @@ func TestRemoveTaskFileHandling(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(saveDir, "test.bin")); err != nil {
 		t.Fatal("仅删除记录时不应删除已下载的文件")
 	}
-	if _, err := os.Stat(m.stagingPath(saveDir, id)); !os.IsNotExist(err) {
+	if _, err := os.Stat(m.stagingPath(id)); !os.IsNotExist(err) {
 		t.Fatal("仅删除记录时暂存数据应被清理")
 	}
-	if _, err := os.Stat(m.stagingDir(saveDir)); !os.IsNotExist(err) {
+	if _, err := os.Stat(m.stagingDir()); !os.IsNotExist(err) {
 		t.Fatal("仅删除记录后暂存目录应为空并移除")
 	}
 
@@ -61,13 +61,13 @@ func TestRemoveTaskFileHandling(t *testing.T) {
 }
 
 // TestOrphanStagingCleanupOnStartup 启动时清理不属于任何现存任务的孤儿暂存文件，
-// 并把旧版本遗留在保存目录的 <文件名>.part 迁移到暂存目录。
+// 并把旧版本遗留在保存目录的暂存数据（v0: <文件名>.part、
+// v1: .downloader/<任务ID>.part）迁移到统一暂存目录。
 func TestOrphanStagingCleanupOnStartup(t *testing.T) {
 	dataDir := t.TempDir()
 	saveDir := t.TempDir()
 
-	// 预置任务列表（一个任务）与暂存目录：一份属于该任务的暂存数据、
-	// 一份孤儿数据、一份旧版本位置的遗留数据
+	// 预置任务列表（一个任务）、旧版暂存目录与 v0 位置的遗留数据
 	store := NewStore(dataDir)
 	task := Task{
 		ID: "live-task", URL: "http://127.0.0.1:1/x", FileName: "x.bin",
@@ -98,18 +98,16 @@ func TestOrphanStagingCleanupOnStartup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := os.Stat(kept); err != nil {
-		t.Fatal("属于现存任务的暂存数据不应被清理")
+	// v0 遗留的 part 应迁入统一暂存目录并改名为 <任务ID>.part；
+	// v1 的同任务 part 因目标已存在而跳过（以先迁移的 v0 数据为准）
+	if data, err := os.ReadFile(m.stagingPath("live-task")); err != nil || string(data) != "legacy" {
+		t.Fatalf("旧位置 part 应迁移到统一暂存目录: data=%q err=%v", data, err)
 	}
-	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
-		t.Fatal("孤儿暂存数据应在启动时被清理")
-	}
-	// 旧版本遗留的 part 应被迁移进暂存目录并改名为 <任务ID>.part
-	if data, err := os.ReadFile(m.stagingPath(saveDir, "live-task")); err != nil || string(data) != "legacy" {
-		t.Fatalf("旧位置 part 应迁移到暂存目录: data=%q err=%v", data, err)
+	// 保存目录里的旧暂存目录应整体移除（孤儿数据随之清理）
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatal("保存目录的旧暂存目录应被移除")
 	}
 	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
 		t.Fatal("旧位置的 part 文件应在迁移后移除")
 	}
-	// live-task.part 迁移进来后覆盖了 kept 的内容——这正是预期（同一任务的最新数据）
 }
