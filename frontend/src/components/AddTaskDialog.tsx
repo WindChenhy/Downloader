@@ -31,6 +31,9 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
   const [priority, setPriority] = useState(1);
   const [startAtLocal, setStartAtLocal] = useState('');
   const [speedLimitKb, setSpeedLimitKb] = useState(0);
+  const [cookie, setCookie] = useState('');
+  const [referer, setReferer] = useState('');
+  const [authOpen, setAuthOpen] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const urlRef = useRef<HTMLTextAreaElement>(null);
@@ -82,6 +85,9 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
         priority,
         startAt,
         speedLimit: Math.max(0, speedLimitKb) * 1024,
+        // 批量链接多来自同一站点，认证头对每条都生效
+        cookie: cookie.trim(),
+        referer: referer.trim(),
       }));
       const result = await api.addTasks(items);
       onAdded();
@@ -225,6 +231,34 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
                 value={checksumExpected}
                 placeholder={t('留空则仅计算摘要')}
                 onChange={(e) => setChecksumExpected(e.target.value)}
+              />
+            </label>
+          </div>
+        )}
+        <button type="button" className="btn small ghost collapse-toggle" onClick={() => setAuthOpen(!authOpen)}>
+          {t('认证（可选）')}{cookie || referer ? t(' · 已填写') : ''}
+          <em className="collapse-caret">{authOpen ? '▴' : '▾'}</em>
+        </button>
+        {authOpen && (
+          <div className="field-grid">
+            <label className="field">
+              <span>{t('Cookie')}</span>
+              <input
+                type="text"
+                value={cookie}
+                spellCheck={false}
+                placeholder={t('从浏览器复制，如 sid=abc; token=def')}
+                onChange={(e) => setCookie(e.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>{t('Referer')}</span>
+              <input
+                type="text"
+                value={referer}
+                spellCheck={false}
+                placeholder={t('防盗链站点常需，如 https://site.example/page')}
+                onChange={(e) => setReferer(e.target.value)}
               />
             </label>
           </div>

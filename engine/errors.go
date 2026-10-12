@@ -9,4 +9,7 @@ var (
 	ErrTaskNotFound = errors.New("任务不存在")
 	// ErrInvalidState 当前状态不允许该操作（如恢复未暂停的任务）。
 	ErrInvalidState = errors.New("当前状态不允许该操作")
+	// ErrNoSpace 磁盘空间不足：任务因此退回队列等复检，不算失败，
+	// 也不该发「下载失败」事件（见 finishTask）。
+	ErrNoSpace = errors.New("磁盘空间不足")
 )

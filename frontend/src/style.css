@@ -512,6 +512,17 @@ body {
   background: transparent;
 }
 
+.collapse-toggle {
+  align-self: flex-start;
+  margin: 2px 0;
+}
+
+.collapse-caret {
+  font-style: normal;
+  margin-left: 6px;
+  opacity: 0.6;
+}
+
 .settings {
   width: 520px;
   margin: 24px auto;
@@ -744,6 +755,168 @@ body {
 
 .search-input:focus {
   border-color: var(--accent);
+}
+
+.queue-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.queue-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -4px 0 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+  min-height: 26px;
+}
+
+.queue-banner.warn {
+  color: var(--amber);
+}
+
+/* 磁盘空间不足的提示：不是错误（任务仍在队列里等），用警示色不用失败色 */
+.task-block {
+  color: var(--amber);
+}
+
+/* 下载统计：卡片 + 手写 SVG 曲线 + 每日柱状 */
+.stats-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.stats-card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+}
+
+.stats-card-label {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.stats-card-value {
+  font-size: 20px;
+  font-weight: 600;
+  margin-top: 4px;
+}
+
+.stats-card-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+
+.chart {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px 6px;
+  margin-bottom: 14px;
+}
+
+.chart-caption {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+
+/* viewBox 等比缩放：不用 preserveAspectRatio=none，否则文字与线宽会被拉变形 */
+.chart-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.chart-grid {
+  stroke: var(--border);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.chart-grid.solid {
+  stroke-dasharray: none;
+}
+
+.chart-axis {
+  fill: var(--text-dim);
+  font-size: 11px;
+}
+
+.chart-empty {
+  fill: var(--text-dim);
+  font-size: 14px;
+}
+
+.chart-area {
+  fill: var(--accent);
+  opacity: 0.16;
+}
+
+.chart-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+
+.chart-dot {
+  fill: var(--accent);
+}
+
+.stats-bars {
+  display: flex;
+  gap: 6px;
+  align-items: flex-end;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  margin-bottom: 14px;
+}
+
+.stats-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 42px;
+}
+
+.stats-bar-value {
+  font-size: 10px;
+  color: var(--text-dim);
+  height: 12px;
+}
+
+.stats-bar-fill {
+  width: 26px;
+  background: var(--accent);
+  border-radius: 3px 3px 0 0;
+  opacity: 0.7;
+}
+
+.stats-bar.today .stats-bar-fill {
+  opacity: 1;
+}
+
+.stats-bar-label {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.stats-task-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+  margin: 8px 0;
 }
 
 .empty.small {

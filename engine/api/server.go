@@ -18,10 +18,24 @@ import (
 // Backend REST API 需要的引擎能力，由 *engine.Manager 实现。
 type Backend interface {
 	GetTasks() []engine.Task
-	AddTask(rawURL, saveDir string, connections int, customName string) (engine.Task, error)
+	AddTaskWithChecksum(p engine.AddTaskParams) (engine.Task, error)
 	PauseTask(id string) error
 	ResumeTask(id string) error
 	RemoveTask(id string, deleteFiles bool) error
+	// 队列级批量操作（见 engine/queueops.go）：返回值为本轮受影响的任务数。
+	PauseAll() int
+	ResumeAll() int
+	RetryAllFailed() int
+	ClearCompleted() int
+	SetQueueSuspended(v bool) error
+	// QueueStatus / SetQueueWindow 队列放行状态与带宽时间窗（窗外不启动新任务）。
+	QueueStatus() engine.QueueStatus
+	SetQueueWindow(enabled bool, start, end string) error
+	// GetStats 下载统计与速度曲线（见 engine/stats.go）。
+	GetStats() engine.Stats
+	// GetTaskStats 单任务曲线：汇总（GetStats）已剥离 Samples，
+	// 曲线改由本接口按任务 ID 按需拉取。
+	GetTaskStats(id string) (engine.TaskStat, bool)
 	GetSettings() engine.Settings
 	SaveSettings(s engine.Settings) error
 	// SaveDirAllowed 目录是否在「默认下载目录 + 白名单」内（写/删文件类操作的前置校验）。

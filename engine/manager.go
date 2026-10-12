@@ -68,6 +68,12 @@ type Manager struct {
 
 	stagingRoot string // 下载暂存目录（分块 .part 所在），运行期只读
 
+	// quit 关闭后进度循环退出；由 Close 触发（应用退出与测试收尾）
+	quit chan struct{}
+	// loopDone 进度循环退出时关闭；Close 据此等它跑完最后一拍，
+	// 否则退出与收尾写盘会并发（测试里表现为 TempDir 删不干净）
+	loopDone chan struct{}
+
 	mu       sync.Mutex
 	settings Settings
 	handles  map[string]*taskHandle
@@ -76,6 +82,15 @@ type Manager struct {
 	limiter  *rateLimiter
 	// queueIdleFired 队列清空后只触发一次「全部完成」动作，新任务会重置
 	queueIdleFired bool
+	// freeSpace 卷剩余空间查询；测试经 WithFreeSpaceProbe 注入假值
+	freeSpace func(path string) (int64, error)
+	// spaceCache 按卷缓存的剩余空间采样（key = volumeKey），mu 保护
+	spaceCache map[string]*spaceStat
+	// stats 下载统计与速度曲线采样，mu 保护（见 stats.go）
+	stats *statsCollector
+	// queueNoteDirty 队列层面的说明变了（任务被空间不足拦下 / 拦不住了自己放行），
+	// progressLoop 据此在「没有任务在跑」时也推一次列表，mu 保护
+	queueNoteDirty bool
 }
 
 // Option 定制 Manager 的可选依赖。
@@ -112,6 +127,16 @@ func WithStagingDir(dir string) Option {
 	}
 }
 
+// WithFreeSpaceProbe 注入磁盘剩余空间查询（测试用固定值）；为 nil 时忽略。
+// 注入后仍走同样的缓存与判定路径，只是系统调用换成给定函数。
+func WithFreeSpaceProbe(fn func(path string) (int64, error)) Option {
+	return func(m *Manager) {
+		if fn != nil {
+			m.freeSpace = fn
+		}
+	}
+}
+
 // NewManager 创建管理器并加载磁盘上的任务与设置。
 // 上次退出时仍在运行的任务一律视为暂停；排队中的任务自动继续排队。
 // 可通过 Option 注入依赖（如 WithHTTPClient / WithClock）。
@@ -130,6 +155,11 @@ func NewManager(dataDir string, notify func(Event), opts ...Option) (*Manager, e
 		handles:     make(map[string]*taskHandle),
 		limiter:     newRateLimiter(settings.SpeedLimit),
 		stagingRoot: filepath.Join(dataDir, "staging"),
+		quit:        make(chan struct{}),
+		loopDone:    make(chan struct{}),
+		freeSpace:   freeSpaceOnPath,
+		spaceCache:  make(map[string]*spaceStat),
+		stats:       newStatsCollector(store.StatsPath()),
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -146,6 +176,9 @@ func NewManager(dataDir string, notify func(Event), opts ...Option) (*Manager, e
 		}
 		m.handles[t.ID] = &taskHandle{task: t, done: make(chan struct{}), prevAt: now}
 		m.order = append(m.order, t.ID)
+		// 统计的差值基准从已落盘的进度起算：否则首次采样会把上次运行前
+		// 下好的字节当成“今天下了一整天”，今日下载量直接虚高
+		m.stats.lastBytes[t.ID] = t.Downloaded
 	}
 	m.mu.Lock()
 	m.persistTasksLocked()
@@ -184,6 +217,9 @@ type AddTaskParams struct {
 	Priority         int    `json:"priority"`   // 0 低 / 1 普通 / 2 高；非法值回落为普通
 	StartAt          string `json:"startAt"`    // RFC3339；空 = 立即
 	SpeedLimit       int64  `json:"speedLimit"` // 每任务限速，0 跟随全局
+	// Cookie / Referer 每任务的认证与防盗链头；空 = 沿用全局自定义请求头
+	Cookie  string `json:"cookie"`
+	Referer string `json:"referer"`
 }
 
 // BatchAddResult 批量新建结果：成功任务列表 + 失败说明（与输入顺序对应可不保证）。
@@ -312,6 +348,8 @@ func (m *Manager) addTaskLocked(u *url.URL, p AddTaskParams) (Task, error) {
 		Priority:         prio,
 		StartAt:          startAt,
 		SpeedLimit:       p.SpeedLimit,
+		Cookie:           strings.TrimSpace(p.Cookie),
+		Referer:          strings.TrimSpace(p.Referer),
 	}
 	m.handles[t.ID] = &taskHandle{task: t, done: make(chan struct{})}
 	m.order = append(m.order, t.ID)
@@ -319,6 +357,22 @@ func (m *Manager) addTaskLocked(u *url.URL, p AddTaskParams) (Task, error) {
 	m.dispatchLocked()
 	m.persistTasksLocked()
 	return t, nil
+}
+
+// pauseLocked 暂停单个任务；调用方须持有 mu，且不负责持久化与事件推送。
+// 排队中的任务就地改为 paused 并返回 true；运行中的任务只发出取消信号，
+// 状态要等该轮 run 退出时由 finishTask 落定（返回 false），其余状态不动作。
+func (m *Manager) pauseLocked(h *taskHandle) (changed bool) {
+	switch h.task.Status {
+	case StatusQueued:
+		h.task.Status = StatusPaused
+		return true
+	case StatusRunning:
+		if h.cancel != nil {
+			h.cancel() // run goroutine 退出后由 finishTask 置为 Paused 并通知
+		}
+	}
+	return false
 }
 
 // PauseTask 暂停任务。排队中立即改状态；运行中则取消本轮下载。
@@ -330,24 +384,16 @@ func (m *Manager) PauseTask(id string) error {
 		return ErrTaskNotFound
 	}
 	var (
-		t           Task
-		notifySnap  []Task
-		notifyPause bool
+		t          Task
+		notifySnap []Task
 	)
-	switch h.task.Status {
-	case StatusQueued:
-		h.task.Status = StatusPaused
+	if m.pauseLocked(h) {
 		t = h.task
-		notifyPause = true
 		m.persistTasksLocked()
 		notifySnap = m.snapshotLocked()
-	case StatusRunning:
-		if h.cancel != nil {
-			h.cancel() // run goroutine 退出后由 finishTask 置为 Paused 并通知
-		}
 	}
 	m.mu.Unlock()
-	if notifyPause {
+	if t.ID != "" {
 		m.emitTasks(notifySnap)
 		m.emitTask(EventTaskPaused, t)
 	}
@@ -500,13 +546,7 @@ func (m *Manager) RemoveTask(id string, deleteFiles bool) error {
 		m.mu.Lock()
 	}
 	t := h.task
-	delete(m.handles, id)
-	for i, oid := range m.order {
-		if oid == id {
-			m.order = append(m.order[:i], m.order[i+1:]...)
-			break
-		}
-	}
+	m.dropLocked(id)
 	m.persistTasksLocked()
 	snap := m.snapshotLocked()
 	m.mu.Unlock()
@@ -514,13 +554,38 @@ func (m *Manager) RemoveTask(id string, deleteFiles bool) error {
 
 	// 未完成的暂存数据（<暂存目录>/<任务ID>.part）随记录一起清理；
 	// 正式文件是否删除由 deleteFiles 决定
-	_ = os.Remove(m.stagingPath(t.ID))
 	if deleteFiles {
 		_ = os.Remove(filepath.Join(t.SaveDir, t.FileName))
 	}
-	_ = os.Remove(m.store.StatePath(id))
-	_ = os.Remove(m.stagingDir()) // 暂存目录已空则一并移除
+	m.cleanupTaskFiles(t)
 	return nil
+}
+
+// dropLocked 把任务从队列（handles + order）中摘除，不落盘、不推事件。
+// 调用方须持有 mu，并自行决定何时 persistTasksLocked —— 批量删除据此
+// 做到「一次加锁、一次落盘、一次推送」。返回 false 表示记录已不存在。
+func (m *Manager) dropLocked(id string) bool {
+	if _, ok := m.handles[id]; !ok {
+		return false
+	}
+	delete(m.handles, id)
+	for i, oid := range m.order {
+		if oid == id {
+			m.order = append(m.order[:i], m.order[i+1:]...)
+			break
+		}
+	}
+	m.stats.drop(id) // 曲线与差值基准随记录一起消失，不留无主采样
+	return true
+}
+
+// cleanupTaskFiles 锁外清理任务的下载残留（分块暂存与续传状态），并在
+// 暂存目录已空时一并移除。正式文件不在这里删（由 deleteFiles 决定）。
+// 单任务删除与批量清理已完成共用这条路径，避免两者行为不一致。
+func (m *Manager) cleanupTaskFiles(t Task) {
+	_ = os.Remove(m.stagingPath(t.ID))
+	_ = os.Remove(m.store.StatePath(t.ID))
+	_ = os.Remove(m.stagingDir()) // 暂存目录已空则一并移除
 }
 
 // GetTasks 返回全部任务快照（含运行中实时进度与活跃耗时）。
@@ -584,8 +649,14 @@ func (m *Manager) HasTaskWithURL(rawURL string) bool {
 
 // dispatchLocked 启动排队任务直到占满并发额度。调用方须持有 mu。
 // 出队顺序：优先级高者先，同级按创建顺序；未到 StartAt 的定时任务跳过。
+// 队列总闸（QueueSuspended）关闭时不启动任何任务，已排队的停在 queued。
+// 磁盘空间不足的任务也停在 queued 并写明 BlockReason，由后续 tick 复检。
 func (m *Manager) dispatchLocked() {
 	now := m.now()
+	m.refreshSpaceBlockLocked(now)
+	if !m.queueActiveLocked(now) {
+		return
+	}
 	for m.running < m.settings.ConcurrentTasks {
 		var nextID string
 		bestPrio := -1
@@ -596,6 +667,9 @@ func (m *Manager) dispatchLocked() {
 			}
 			if !h.task.StartAt.IsZero() && h.task.StartAt.After(now) {
 				continue // 定时未到点
+			}
+			if h.task.BlockReason != "" {
+				continue // 写不下：不占并发额度，等空间腾出来
 			}
 			if h.task.Priority > bestPrio {
 				bestPrio = h.task.Priority
@@ -608,6 +682,10 @@ func (m *Manager) dispatchLocked() {
 		h := m.handles[nextID]
 		h.task.Status = StatusRunning
 		h.task.Error = ""
+		if h.task.BlockReason != "" {
+			h.task.BlockReason = ""
+			m.queueNoteDirty = true
+		}
 		// 基准先取任务已记录的进度：probe 期间界面不闪回 0，
 		// runner 探测完成后会用续传状态里的精确值覆盖
 		h.base = h.task.Downloaded
@@ -633,6 +711,47 @@ func (m *Manager) dispatchLocked() {
 	}
 }
 
+// queueActiveLocked 队列此刻是否允许启动新任务。调用方须持有 mu。
+// 总闸由用户控制；带宽时间窗（见 windowActiveLocked）到点与出窗由
+// progressLoop 的 tick 驱动，因此这里取一次即可。
+func (m *Manager) queueActiveLocked(now time.Time) bool {
+	if m.settings.QueueSuspended {
+		return false
+	}
+	return m.windowActiveLocked(now)
+}
+
+// windowActiveLocked 当前时刻是否落在带宽时间窗内；未启用或配置非法（起止相同）
+// 一律视为全天。调用方须持有 mu。
+func (m *Manager) windowActiveLocked(now time.Time) bool {
+	if !m.settings.WindowEnabled {
+		return true
+	}
+	return windowContains(m.settings.WindowStart, m.settings.WindowEnd, now)
+}
+
+// refreshSpaceBlockLocked 为全部排队任务标注或清除「磁盘空间不足」原因。
+// 原因变了才置 queueNoteDirty——被拦住时没有任何任务在跑，进度循环默认
+// 不推列表，靠这个标记把提示送进界面。调用方须持有 mu。
+func (m *Manager) refreshSpaceBlockLocked(now time.Time) {
+	for _, id := range m.order {
+		h := m.handles[id]
+		if h.task.Status != StatusQueued {
+			if h.task.BlockReason != "" {
+				h.task.BlockReason = ""
+				m.queueNoteDirty = true
+			}
+			continue
+		}
+		reason := m.spaceBlockLocked(h.task, now)
+		if reason == h.task.BlockReason {
+			continue
+		}
+		h.task.BlockReason = reason
+		m.queueNoteDirty = true
+	}
+}
+
 // finishTask 收尾一轮运行：更新状态、持久化、通知、调度下一个任务。
 func (m *Manager) finishTask(h *taskHandle, err error) {
 	m.mu.Lock()
@@ -641,8 +760,10 @@ func (m *Manager) finishTask(h *taskHandle, err error) {
 	h.limiter = nil // 本轮限速器随运行结束作废
 	h.task.Speed = 0
 	// 结算本轮活跃下载耗时（暂停前一直在下的时间）
+	var activeDelta int64
 	if !h.runStartedAt.IsZero() {
-		h.task.ActiveMs += m.now().Sub(h.runStartedAt).Milliseconds()
+		activeDelta = m.now().Sub(h.runStartedAt).Milliseconds()
+		h.task.ActiveMs += activeDelta
 		h.runStartedAt = time.Time{}
 	}
 
@@ -661,6 +782,13 @@ func (m *Manager) finishTask(h *taskHandle, err error) {
 		h.task.Error = ""
 		h.task.Downloaded = m.exactDownloadedLocked(h)
 		h.task.AvgSpeed = avgSpeedOf(h.task.Downloaded, h.task.ActiveMs)
+	case errors.Is(err, ErrNoSpace):
+		// 写不下不是失败：一个字节都没落盘，退回队列等复检，
+		// BlockReason 已由 runner 写好，这一轮的探测耗时也不计入下载耗时
+		h.task.Status = StatusQueued
+		h.task.Error = ""
+		h.task.ActiveMs -= activeDelta
+		m.queueNoteDirty = true
 	default:
 		h.task.Status = StatusFailed
 		h.task.Error = err.Error()
@@ -672,13 +800,21 @@ func (m *Manager) finishTask(h *taskHandle, err error) {
 	m.persistTasksLocked()
 	snap := m.snapshotLocked()
 	status := h.task.Status
+	m.stats.sample(snap, m.now())
+	m.stats.recordFinish(t, status, m.now())
+	statsData, _ := m.stats.payload(m.now(), false) // 持锁组装，写盘在锁外
 	idle := m.queueIdleLocked()
 	m.dispatchLocked()
 	m.mu.Unlock()
 	m.emitTasks(snap)
-	if status == StatusPaused {
+	m.writeStatsData(statsData)
+	switch status {
+	case StatusPaused:
 		m.emitTask(EventTaskPaused, t)
-	} else {
+	case StatusQueued:
+		// 空间不足退回队列：列表快照里的 BlockReason 已足够说明，
+		// 既不算暂停也不算结束，不发单任务事件
+	default:
 		m.emitTask(EventTaskFinished, t) // 供系统通知等上层钩子使用（完成/失败）
 	}
 	if idle {
@@ -686,15 +822,18 @@ func (m *Manager) finishTask(h *taskHandle, err error) {
 	}
 }
 
-// queueIdleLocked 检测本轮结束后是否已无排队/运行任务，并保证只通知一次。
+// queueIdleLocked 检测本轮结束后队列是否已全部结束，并保证只通知一次。
 // 调用方须持有 mu。
+// paused 任务与闭闸都算「还没下完」：收到该事件后上层可能执行关机/退出等
+// 完成后动作，在仍有未完成任务时触发会直接打断下载（暂停全部即为一例）。
 func (m *Manager) queueIdleLocked() bool {
-	if m.running > 0 {
+	if m.running > 0 || !m.queueActiveLocked(m.now()) {
 		return false
 	}
 	for _, h := range m.handles {
-		if h.task.Status == StatusRunning || h.task.Status == StatusQueued {
-			return false // 仍有人在跑，或还有排队/定时待启动
+		switch h.task.Status {
+		case StatusRunning, StatusQueued, StatusPaused:
+			return false // 仍有人在跑，或还有排队/定时待启动/被暂停的任务
 		}
 	}
 	if m.queueIdleFired || len(m.handles) == 0 {
@@ -808,13 +947,22 @@ func (m *Manager) persistTasksLocked() {
 func (m *Manager) progressLoop() {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
-	for range ticker.C {
+	defer close(m.loopDone)
+	for {
+		select {
+		case <-m.quit:
+			return
+		case <-ticker.C:
+		}
 		m.mu.Lock()
-		m.dispatchLocked() // 定时任务到点后可启动
-		if m.running == 0 {
+		m.dispatchLocked() // 定时任务到点、空间复检后可启动
+		// 没任务在跑时一般无事可推，但队列级说明变化（被空间拦住 / 自己放行）
+		// 必须让界面看到，否则提示永远进不了列表
+		if m.running == 0 && !m.queueNoteDirty {
 			m.mu.Unlock()
 			continue
 		}
+		m.queueNoteDirty = false
 		now := m.now()
 		out := make([]Task, 0, len(m.order))
 		for _, id := range m.order {
@@ -826,8 +974,11 @@ func (m *Manager) progressLoop() {
 			}
 			out = append(out, h.task)
 		}
+		m.stats.sample(out, now)
+		statsData, _ := m.stats.payload(now, false) // 持锁组装，写盘在锁外
 		m.mu.Unlock()
 		m.emitTasks(out)
+		m.writeStatsData(statsData)
 	}
 }
 

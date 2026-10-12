@@ -15,6 +15,12 @@ jobs:
         with:
           go-version: '1.25'
 
+      # main 包 //go:embed all:frontend/dist 编译时要求目录存在；
+      # 真实产物由 frontend job 产出、build job 下载，这里只需占位
+      - name: 预置前端产物占位
+        shell: bash
+        run: mkdir -p frontend/dist && echo placeholder > frontend/dist/index.html
+
       - name: gofmt 检查
         shell: bash
         run: |

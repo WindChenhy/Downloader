@@ -17,10 +17,19 @@ import (
 //
 //	GET    /api/v1/ping                       健康检查（免令牌）
 //	GET    /api/v1/tasks                      任务列表（含实时进度）
-//	POST   /api/v1/tasks                      新建任务 {url, saveDir?, connections?, fileName?}
+//	POST   /api/v1/tasks                      新建任务，字段与 engine.AddTaskParams 一致（fileName 为 customName 别名）
 //	POST   /api/v1/tasks/{id}/pause           暂停
 //	POST   /api/v1/tasks/{id}/continue        恢复
 //	DELETE /api/v1/tasks/{id}                 删除（files=1 连文件删除，目录须在白名单内）
+//	POST   /api/v1/queue/pause-all            暂停全部（返回受影响任务数）
+//	POST   /api/v1/queue/resume-all           恢复全部（含失败任务）
+//	POST   /api/v1/queue/retry-failed         仅重试失败任务
+//	POST   /api/v1/queue/clear-completed      清理已完成记录（保留磁盘文件）
+//	PUT    /api/v1/queue/suspended            开关队列总闸 {"suspended": true}
+//	GET    /api/v1/queue/status               队列放行状态（闸门/时间窗/空间不足停摆数）
+//	PUT    /api/v1/queue/window               带宽时间窗 {"enabled":true,"start":"22:00","end":"06:00"}
+//	GET    /api/v1/stats                      下载统计与速度曲线（今日/7 天/累计 + 最近曲线）
+//	GET    /api/v1/stats/tasks/{id}            单任务速度曲线（任务无统计记录时 404）
 //	GET    /api/v1/settings                   读取设置
 //	PUT    /api/v1/settings                   保存设置
 func (s *Server) Handler() http.Handler {
@@ -53,21 +62,23 @@ func (s *Server) Handler() http.Handler {
 	})
 
 	mux.HandleFunc("POST /api/v1/tasks", func(w http.ResponseWriter, r *http.Request) {
+		// 内嵌 AddTaskParams：校验和/优先级/定时/每任务限速等扩展字段与引擎同名同 tag
 		var body struct {
-			URL         string `json:"url"`
-			SaveDir     string `json:"saveDir"`
-			Connections int    `json:"connections"`
-			FileName    string `json:"fileName"` // 可选：自定义文件名
+			engine.AddTaskParams
+			FileName string `json:"fileName"` // 已发布文档用的字段名，与 customName 同义
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeErr(w, http.StatusBadRequest, "无效的请求体")
 			return
 		}
+		if body.FileName != "" {
+			body.CustomName = body.FileName
+		}
 		if !b.SaveDirAllowed(body.SaveDir) {
 			writeErr(w, http.StatusForbidden, "saveDir 不在允许的目录白名单内（可在设置中配置）")
 			return
 		}
-		t, err := b.AddTask(body.URL, body.SaveDir, body.Connections, body.FileName)
+		t, err := b.AddTaskWithChecksum(body.AddTaskParams)
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
@@ -112,8 +123,72 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	})
 
+	// 队列级批量操作：与单任务 pause/continue 一样无请求体，返回受影响任务数
+	queuePost := func(path string, fn func() int) {
+		mux.HandleFunc("POST "+path, func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusOK, map[string]int{"count": fn()})
+		})
+	}
+	queuePost("/api/v1/queue/pause-all", b.PauseAll)
+	queuePost("/api/v1/queue/resume-all", b.ResumeAll)
+	queuePost("/api/v1/queue/retry-failed", b.RetryAllFailed)
+	queuePost("/api/v1/queue/clear-completed", b.ClearCompleted)
+
+	mux.HandleFunc("PUT /api/v1/queue/suspended", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Suspended bool `json:"suspended"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeErr(w, http.StatusBadRequest, "无效的请求体")
+			return
+		}
+		if err := b.SetQueueSuspended(body.Suspended); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"suspended": b.GetSettings().QueueSuspended})
+	})
+
+	// 队列为什么不动：用户闭闸 / 带宽时间窗外 / 磁盘空间不足，三者分开报
+	mux.HandleFunc("GET /api/v1/queue/status", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, b.QueueStatus())
+	})
+
+	mux.HandleFunc("PUT /api/v1/queue/window", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Enabled bool   `json:"enabled"`
+			Start   string `json:"start"` // "HH:MM"，本地时间
+			End     string `json:"end"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeErr(w, http.StatusBadRequest, "无效的请求体")
+			return
+		}
+		// 时间格式非法属于调用方错误，不记 500
+		if err := b.SetQueueWindow(body.Enabled, body.Start, body.End); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, b.QueueStatus())
+	})
+
 	mux.HandleFunc("GET /api/v1/settings", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, b.GetSettings())
+	})
+
+	mux.HandleFunc("GET /api/v1/stats", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, b.GetStats())
+	})
+
+	// 单任务曲线按需拉取：GET /api/v1/stats 的汇总不再带 samples，
+	// 前端选中某任务时才走这里
+	mux.HandleFunc("GET /api/v1/stats/tasks/{id}", func(w http.ResponseWriter, r *http.Request) {
+		ts, ok := b.GetTaskStats(r.PathValue("id"))
+		if !ok {
+			writeErr(w, http.StatusNotFound, "该任务暂无统计记录")
+			return
+		}
+		writeJSON(w, http.StatusOK, ts)
 	})
 
 	mux.HandleFunc("PUT /api/v1/settings", func(w http.ResponseWriter, r *http.Request) {

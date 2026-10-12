@@ -115,17 +115,66 @@ type taskRunner struct {
 	taskLimiter  *rateLimiter // 每任务限速器（dispatchLocked 创建；0 = 不限）
 }
 
+// runClient 返回本轮使用的客户端：复用 Manager 的 Transport（连接池与代理设置
+// 不变），只额外挂上重定向策略。标准库在跨主机重定向时会剥掉 Cookie 等敏感头，
+// 认证下载必须把本轮请求头补回去，但只补到同站目标（见 keepHeadersOnRedirect）。
+func (r *taskRunner) runClient() *http.Client {
+	c := *r.m.httpClient()
+	c.CheckRedirect = r.keepHeadersOnRedirect
+	return &c
+}
+
+// keepHeadersOnRedirect 每次重定向都重新施加本轮的 UA 与请求头。
+// 头经 applyExtraHeaders 写入，因此 Range 依然受保护：分段请求被重定向时
+// 若覆盖掉 Range，该段会从头重下并写坏文件偏移。
+// 凭据类头（Cookie/Authorization 等）只在同站跳转时补回：dl.example.com →
+// cdn.example.com 这类签名 CDN 跳转要继续带认证，但异站目标（或被劫持的
+// http 直链指向的收集端）一个字节的凭据都不能带出去。
+func (r *taskRunner) keepHeadersOnRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return http.ErrUseLastResponse
+	}
+	extra := r.extraHeaders
+	if !sameSite(via[0].URL, req.URL) {
+		// 标准库的 copyHeaders 在 CheckRedirect 之前执行：同主机 https→http
+		// 降级时它判定"主机未变"，会把原始请求的 Cookie 原样复制到新请求上。
+		// 只过滤 extra 不够，必须从 req.Header 直接删除凭据头。
+		for k := range req.Header {
+			if sensitiveHeaders[http.CanonicalHeaderKey(k)] {
+				req.Header.Del(k)
+			}
+		}
+		extra = make(map[string]string, len(r.extraHeaders))
+		for k, v := range r.extraHeaders {
+			if sensitiveHeaders[http.CanonicalHeaderKey(k)] {
+				continue
+			}
+			extra[k] = v
+		}
+	}
+	applyExtraHeaders(req, extra)
+	req.Header.Set("User-Agent", r.userAgent)
+	return nil
+}
+
 func (r *taskRunner) run(ctx context.Context) error {
 	// 运行开始时锁定设置快照：UA/请求头/镜像/代理在本轮内保持一致，
 	// client 一并快照——否则保存设置重建客户端后，同一文件的不同分段
 	// 可能走不同的代理出口
 	r.settings = r.m.GetSettings()
-	r.client = r.m.httpClient()
 	r.userAgent = strings.TrimSpace(r.settings.UserAgent)
 	if r.userAgent == "" {
 		r.userAgent = defaultUA
 	}
 	r.extraHeaders = parseExtraHeaders(r.settings.ExtraHeaders)
+	// 每任务认证头覆盖全局同名项：站点 A 的 Cookie 不会跟着站点 B 的请求发出去
+	if c := strings.TrimSpace(r.task.Cookie); c != "" {
+		r.extraHeaders["Cookie"] = c
+	}
+	if ref := strings.TrimSpace(r.task.Referer); ref != "" {
+		r.extraHeaders["Referer"] = ref
+	}
+	r.client = r.runClient()
 	r.fetchURL = resolveFetchURL(r.settings, r.task.URL)
 	// taskLimiter 由 dispatchLocked 创建并挂在 handle 上（运行中可经
 	// SetTaskSpeedLimit 热更新），这里不再自建
@@ -174,6 +223,18 @@ func (r *taskRunner) run(ctx context.Context) error {
 	r.task.TotalSize = total
 	if r.sidecar.TotalSize <= 0 && total > 0 {
 		r.sidecar.TotalSize = total
+	}
+
+	// 第二轮空间检查：dispatch 那次对新任务只能按「大小未知」判断，真实大小要探测才知道。
+	// 趁一个字节都还没写先问一次，写不下就原路退回队列：空间腾出来会自己再跑，
+	// 不记失败也不发失败通知（见 finishTask 的 ErrNoSpace 分支）。
+	if reason := r.m.spaceReasonFor(r.task, total); reason != "" {
+		r.m.updateTask(r.h, func(t *Task) {
+			t.FileName = r.task.FileName
+			t.TotalSize = r.task.TotalSize
+			t.BlockReason = reason
+		})
+		return &noSpaceError{reason: reason}
 	}
 
 	if err := os.MkdirAll(filepath.Dir(r.partPath), 0o755); err != nil {

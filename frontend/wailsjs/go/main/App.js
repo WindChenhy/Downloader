@@ -14,12 +14,24 @@ export function ApplyCloseAction(arg1, arg2) {
   return window['go']['main']['App']['ApplyCloseAction'](arg1, arg2);
 }
 
-export function ExportTasksJSON() {
-  return window['go']['main']['App']['ExportTasksJSON']();
+export function ClearCompleted() {
+  return window['go']['main']['App']['ClearCompleted']();
+}
+
+export function ExportTasksJSON(arg1) {
+  return window['go']['main']['App']['ExportTasksJSON'](arg1);
 }
 
 export function GetSettings() {
   return window['go']['main']['App']['GetSettings']();
+}
+
+export function GetStats() {
+  return window['go']['main']['App']['GetStats']();
+}
+
+export function GetTaskStats(arg1) {
+  return window['go']['main']['App']['GetTaskStats'](arg1);
 }
 
 export function GetTasks() {
@@ -38,8 +50,16 @@ export function OpenFolder(arg1, arg2) {
   return window['go']['main']['App']['OpenFolder'](arg1, arg2);
 }
 
+export function PauseAll() {
+  return window['go']['main']['App']['PauseAll']();
+}
+
 export function PauseTask(arg1) {
   return window['go']['main']['App']['PauseTask'](arg1);
+}
+
+export function QueueStatus() {
+  return window['go']['main']['App']['QueueStatus']();
 }
 
 export function Quit() {
@@ -50,12 +70,28 @@ export function RemoveTask(arg1, arg2) {
   return window['go']['main']['App']['RemoveTask'](arg1, arg2);
 }
 
+export function ResumeAll() {
+  return window['go']['main']['App']['ResumeAll']();
+}
+
 export function ResumeTask(arg1) {
   return window['go']['main']['App']['ResumeTask'](arg1);
 }
 
+export function RetryAllFailed() {
+  return window['go']['main']['App']['RetryAllFailed']();
+}
+
 export function SaveSettings(arg1) {
   return window['go']['main']['App']['SaveSettings'](arg1);
+}
+
+export function SetQueueSuspended(arg1) {
+  return window['go']['main']['App']['SetQueueSuspended'](arg1);
+}
+
+export function SetQueueWindow(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SetQueueWindow'](arg1, arg2, arg3);
 }
 
 export function SetTaskPriority(arg1, arg2) {

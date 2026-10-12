@@ -114,6 +114,39 @@ func (a *App) AddTasks(items []engine.AddTaskParams) engine.BatchAddResult {
 func (a *App) PauseTask(id string) error  { return a.mgr.PauseTask(id) }
 func (a *App) ResumeTask(id string) error { return a.mgr.ResumeTask(id) }
 
+// PauseAll 暂停全部未结束的任务（排队中立即暂停，运行中的取消本轮），返回受影响任务数。
+func (a *App) PauseAll() int { return a.mgr.PauseAll() }
+
+// ResumeAll 恢复全部已暂停与已失败的任务；队列总闸关闭时任务停在排队中。
+func (a *App) ResumeAll() int { return a.mgr.ResumeAll() }
+
+// RetryAllFailed 仅重试失败任务，不动已暂停的任务。
+func (a *App) RetryAllFailed() int { return a.mgr.RetryAllFailed() }
+
+// ClearCompleted 移除全部已完成任务的记录，磁盘上的文件保留。
+func (a *App) ClearCompleted() int { return a.mgr.ClearCompleted() }
+
+// SetQueueSuspended 开关队列总闸：闭闸后不再启动任何任务，状态跨重启保持。
+func (a *App) SetQueueSuspended(v bool) error { return a.mgr.SetQueueSuspended(v) }
+
+// QueueStatus 队列放行状态：用户总闸、带宽时间窗、因磁盘空间不足停在队列里的任务数。
+// 三者都会让任务停在「排队中」，界面据此区分文案。
+func (a *App) QueueStatus() engine.QueueStatus { return a.mgr.QueueStatus() }
+
+// SetQueueWindow 配置带宽时间窗：窗外不启动新任务（正在下载的不受影响），状态持久化。
+func (a *App) SetQueueWindow(enabled bool, start, end string) error {
+	return a.mgr.SetQueueWindow(enabled, start, end)
+}
+
+// GetStats 返回下载统计与速度曲线（统计页轮询用）。
+func (a *App) GetStats() engine.Stats { return a.mgr.GetStats() }
+
+// GetTaskStats 返回单任务曲线（统计页选中任务时按需拉取；GetStats 的
+// 任务汇总不再携带 Samples，避免每次轮询全量序列化）。
+func (a *App) GetTaskStats(id string) (engine.TaskStat, bool) {
+	return a.mgr.GetTaskStats(id)
+}
+
 // SetTaskPriority 设置任务优先级（0 低 / 1 普通 / 2 高）。
 func (a *App) SetTaskPriority(id string, priority int) error {
 	return a.mgr.SetTaskPriority(id, priority)
@@ -133,8 +166,9 @@ func (a *App) SetTaskStartAt(id string, startAt string) error {
 }
 
 // ExportTasksJSON 导出任务列表 JSON 字符串（前端触发下载）。
-func (a *App) ExportTasksJSON() (string, error) {
-	data, err := a.mgr.ExportTasksJSON()
+// withAuth 为 true 时才带出每任务的 Cookie/Referer——这两项常含会话凭据，默认剥离。
+func (a *App) ExportTasksJSON(withAuth bool) (string, error) {
+	data, err := a.mgr.ExportTasksJSON(withAuth)
 	if err != nil {
 		return "", err
 	}
@@ -299,4 +333,8 @@ func (a *App) requestQuit() {
 func (a *App) shutdown(ctx context.Context) {
 	a.quitting.Store(true)
 	quitTray()
+	// 停掉后台进度循环并强制落盘统计（平时 30s 节流），否则最后一段采样白丢
+	if a.mgr != nil {
+		_ = a.mgr.Close()
+	}
 }

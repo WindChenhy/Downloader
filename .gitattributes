@@ -1,0 +1,7 @@
+# 统一文本文件换行为 LF：
+# gofmt 以 LF 为准，Windows 上 git autocrlf 检出会把 LF 转成 CRLF，
+# 导致 CI 的 gofmt -l 把全部文件判为未格式化。
+# .gitattributes 优先级高于 autocrlf，检出时强制保持 LF。
+* text=auto eol=lf
+*.png binary
+*.ico binary

@@ -31,6 +31,11 @@ export interface Task {
   checksumExpected?: string;
   checksumActual?: string;
   checksumStatus?: 'ok' | 'mismatch' | 'error' | 'skipped' | '';
+  /** 每任务认证与防盗链头（可选）；空 = 沿用全局自定义请求头 */
+  cookie?: string;
+  referer?: string;
+  /** 停在队列里却没被启动的原因（磁盘空间不足）；空 = 无阻塞 */
+  blockReason?: string;
 }
 
 export interface AddTaskParams {
@@ -43,6 +48,8 @@ export interface AddTaskParams {
   priority?: number;
   startAt?: string;
   speedLimit?: number;
+  cookie?: string;
+  referer?: string;
 }
 
 export interface BatchAddResult {
@@ -89,6 +96,16 @@ export interface Settings {
   afterComplete: AfterCompleteAction;
   /** 界面语言（解析后的具体值，供系统通知/托盘使用）；前端偏好见 i18n 的 LangPref */
   language?: 'zh-CN' | 'en-US';
+  /** 队列总闸：true = 不启动任何任务，已排队的停在排队中；跨重启保持 */
+  queueSuspended?: boolean;
+  /** 带宽时间窗：启用后只在 [windowStart, windowEnd) 内启动新任务 */
+  windowEnabled?: boolean;
+  windowStart?: string;
+  windowEnd?: string;
+  /** 磁盘空间预检查开关（字段取反：老设置没这个键 = 开启） */
+  diskGuardOff?: boolean;
+  /** 预检查在文件大小之外还要保留的余量（字节），0 = 不留 */
+  diskMinFree?: number;
 }
 
 export type ThemeMode = 'light' | 'dark' | 'system';
@@ -117,4 +134,75 @@ export function isScheduled(task: Task, now = Date.now()): boolean {
   // Go 零值
   if (task.startAt.startsWith('0001-01-01')) return false;
   return task.status === 'queued' || task.status === 'paused';
+}
+
+/** SpeedPoint 速度采样点：t = 毫秒时间戳，v = 字节/秒（窗口平均速率）。 */
+export interface SpeedPoint {
+  t: number;
+  v: number;
+}
+
+/** DailyStat 单日聚合；completed/failed 计的是「结束轮次」。 */
+export interface DailyStat {
+  date: string;
+  bytes: number;
+  completed: number;
+  failed: number;
+  peakSpeed: number;
+  sumSpeed: number;
+  samples: number;
+}
+
+/** TaskStat 单任务统计汇总；samples 只为最近 15 个任务落盘（更早的只有汇总）。 */
+export interface TaskStat {
+  taskId: string;
+  fileName: string;
+  url: string;
+  status: Status;
+  bytes: number;
+  totalSize: number;
+  avgSpeed: number;
+  peakSpeed: number;
+  activeMs: number;
+  updatedAt: number;
+  samples?: SpeedPoint[];
+}
+
+/** Stats 统计页一次读取的全部数据（引擎 engine.Stats）。 */
+export interface Stats {
+  generatedAt: number;
+  todayBytes: number;
+  weekBytes: number;
+  totalBytes: number;
+  currentSpeed: number;
+  peakSpeed: number;
+  avgSpeed: number;
+  windowMs: number;
+  globalFrom: number;
+  globalTo: number;
+  todayCompleted: number;
+  todayFailed: number;
+  taskCount: number;
+  running: number;
+  queued: number;
+  completed: number;
+  failed: number;
+  paused: number;
+  daily: DailyStat[];
+  global: SpeedPoint[];
+  tasks: TaskStat[];
+}
+
+/** QueueStatus 队列为何不动：用户总闸 / 带宽时间窗外 / 磁盘空间不足。 */
+export interface QueueStatus {
+  active: boolean;
+  suspended: boolean;
+  windowEnabled: boolean;
+  windowActive: boolean;
+  windowStart: string;
+  windowEnd: string;
+  /** 窗外时下一次放行的时刻（RFC3339）；窗内为空串 */
+  opensAt: string;
+  /** 因磁盘空间不足停在队列里的任务数 */
+  blockedTasks: number;
 }

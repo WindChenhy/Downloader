@@ -8,8 +8,9 @@ import {api} from './api';
 import TaskList from './components/TaskList';
 import AddTaskDialog from './components/AddTaskDialog';
 import SettingsPage from './components/SettingsPage';
+import StatsPage from './components/StatsPage';
 import CloseConfirmDialog from './components/CloseConfirmDialog';
-import {GearIcon, MonitorIcon, MoonIcon, PlusIcon, SunIcon} from './components/icons';
+import {ChartIcon, GearIcon, MonitorIcon, MoonIcon, PlusIcon, SunIcon} from './components/icons';
 
 function loadTheme(): ThemeMode {
   const v = localStorage.getItem('theme');
@@ -20,7 +21,7 @@ export default function App() {
   const {t, langPref, setLang} = useI18n();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
-  const [view, setView] = useState<'list' | 'settings'>('list');
+  const [view, setView] = useState<'list' | 'settings' | 'stats'>('list');
   const [showDialog, setShowDialog] = useState(false);
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const [prefillUrl, setPrefillUrl] = useState('');
@@ -29,6 +30,10 @@ export default function App() {
 
   const refresh = useCallback(() => {
     api.getTasks().then(setTasks).catch(() => {});
+  }, []);
+
+  const refreshSettings = useCallback(() => {
+    api.getSettings().then(setSettings).catch(() => {});
   }, []);
 
   // 主题三态：light / dark / 跟随系统（监听系统切换实时生效）
@@ -107,6 +112,13 @@ export default function App() {
             {theme === 'light' ? <SunIcon size={16} /> : theme === 'dark' ? <MoonIcon size={16} /> : <MonitorIcon size={16} />}
           </button>
           <button
+            className={`btn icon ghost ${view === 'stats' ? 'active' : ''}`}
+            title={t('下载统计')}
+            onClick={() => setView(view === 'stats' ? 'list' : 'stats')}
+          >
+            <ChartIcon size={16} />
+          </button>
+          <button
             className={`btn icon ghost ${view === 'settings' ? 'active' : ''}`}
             title={t('设置')}
             onClick={() => setView(view === 'settings' ? 'list' : 'settings')}
@@ -136,8 +148,10 @@ export default function App() {
             onSaved={setSettings}
             onBack={() => setView('list')}
           />
+        ) : view === 'stats' ? (
+          <StatsPage onBack={() => setView('list')} />
         ) : (
-          <TaskList tasks={tasks} onChanged={refresh} />
+          <TaskList tasks={tasks} onChanged={refresh} onSettingsChanged={refreshSettings} />
         )}
       </main>
 
