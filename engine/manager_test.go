@@ -141,7 +141,17 @@ func mustManager(t *testing.T) (*Manager, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	stopOnCleanup(t, m)
 	return m, t.TempDir()
+}
+
+// stopOnCleanup 让 Manager 在用例结束时停掉后台进度循环（不落盘）。
+// 不停的话它会和 t.TempDir() 的清理抢同一个目录（Windows 上报「目录非空」），
+// 每个用例还漏一个 goroutine；这里故意不 Close（会多写一个刚创建就被安全
+// 软件锁住的 stats.json），落盘行为由统计用例自己显式验证。
+func stopOnCleanup(t *testing.T, m *Manager) {
+	t.Helper()
+	t.Cleanup(m.Stop)
 }
 
 func TestManagerMultiChunkDownload(t *testing.T) {

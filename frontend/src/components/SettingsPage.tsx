@@ -68,9 +68,17 @@ export default function SettingsPage({
     dirCategories: settings.dirCategories ?? [],
     autoExtract: settings.autoExtract ?? false,
     afterComplete: settings.afterComplete ?? 'none',
+    queueSuspended: settings.queueSuspended ?? false,
+    windowEnabled: settings.windowEnabled ?? false,
+    windowStart: settings.windowStart ?? '00:00',
+    windowEnd: settings.windowEnd ?? '00:00',
+    diskGuardOff: settings.diskGuardOff ?? false,
+    diskMinFree: settings.diskMinFree ?? 0,
   });
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState('');
+  // 导出任务包时是否带出每任务的 Cookie/Referer——常含会话凭据，默认不带
+  const [exportAuth, setExportAuth] = useState(false);
   // 应用内重命名弹窗（替代原生 prompt）
   const [renameTarget, setRenameTarget] = useState<{index: number; name: string} | null>(null);
   const [renameValue, setRenameValue] = useState('');
@@ -117,6 +125,7 @@ export default function SettingsPage({
   };
 
   const speedLimitKb = form.speedLimit > 0 ? Math.round(form.speedLimit / 1024) : 0;
+  const diskMinFreeMb = (form.diskMinFree ?? 0) > 0 ? Math.round((form.diskMinFree ?? 0) / (1024 * 1024)) : 0;
 
   useEffect(() => {
     if (renameTarget == null) return;
@@ -379,14 +388,95 @@ export default function SettingsPage({
         </select>
       </label>
 
+      <h3>{t('队列')}</h3>
+      <Switch
+        checked={!!form.queueSuspended}
+        onChange={async (v) => {
+          // 闸门即时生效，不等「保存」按钮：它是运行期开关而非常规设置
+          try {
+            await api.setQueueSuspended(v);
+            const next = {...form, queueSuspended: v};
+            setForm(next);
+            onSaved(next);
+            setError('');
+          } catch (e) {
+            setError(t('保存失败：{e}', {e: String(e)}));
+          }
+        }}
+        label={t('暂停队列')}
+        hint={t('闭闸后不再启动任何任务，正在下载的不受影响；重启后保持')}
+      />
+      <Switch
+        checked={!!form.windowEnabled}
+        onChange={(v) => set({windowEnabled: v})}
+        label={t('带宽时间窗')}
+        hint={t('只在指定时段内启动新任务；正在下载的任务不会被中断，窗外等于自动闭闸')}
+      />
+      {form.windowEnabled && (
+        <>
+          <div className="field-grid">
+            <label className="field">
+              <span>{t('带宽时间窗开始')}</span>
+              <input
+                type="time"
+                value={form.windowStart ?? '00:00'}
+                onChange={(e) => set({windowStart: e.target.value})}
+              />
+            </label>
+            <label className="field">
+              <span>{t('带宽时间窗结束')}</span>
+              <input
+                type="time"
+                value={form.windowEnd ?? '00:00'}
+                onChange={(e) => set({windowEnd: e.target.value})}
+              />
+            </label>
+          </div>
+          <div className="settings-note">
+            {form.windowStart === form.windowEnd
+              ? t('起止时间相同：等于全天放行')
+              : form.windowStart && form.windowEnd && form.windowStart > form.windowEnd
+                ? t('结束时间早于开始时间：视为跨零点（如 22:00–06:00）')
+                : t('到点自动放行排队任务，无需手动开闸')}
+          </div>
+        </>
+      )}
+
+      <h3>{t('磁盘')}</h3>
+      <Switch
+        checked={!form.diskGuardOff}
+        onChange={(v) => set({diskGuardOff: !v})}
+        label={t('下载前检查磁盘空间')}
+        hint={t('装不下时任务停在队列里并说明原因，腾出空间后自动继续下载')}
+      />
+      {!form.diskGuardOff && (
+        <div className="field-grid">
+          <label className="field">
+            <span>{t('额外保留空间（MB，0 不留）')}</span>
+            <input
+              type="number"
+              min={0}
+              value={diskMinFreeMb}
+              onChange={(e) => set({diskMinFree: Math.max(0, Number(e.target.value)) * 1024 * 1024})}
+            />
+          </label>
+        </div>
+      )}
+
       <h3>{t('任务列表')}</h3>
+      <Switch
+        checked={exportAuth}
+        onChange={setExportAuth}
+        label={t('导出时包含 Cookie / Referer')}
+        hint={t('这两项常含会话凭据，默认剥离；仅在自己迁移任务包时勾选')}
+      />
       <div className="field-grid">
         <button
           type="button"
           className="btn ghost"
           onClick={async () => {
             try {
-              const json = await api.exportTasksJson();
+              const json = await api.exportTasksJson(exportAuth);
               const blob = new Blob([json], {type: 'application/json'});
               const a = document.createElement('a');
               a.href = URL.createObjectURL(blob);

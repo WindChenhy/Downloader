@@ -22,6 +22,11 @@ interface Props {
   onClose: () => void;
 }
 
+// maskSecret 认证头常含会话令牌：详情里只露长度，原文经复制取用。
+function maskSecret(v: string): string {
+  return `${'•'.repeat(Math.min(v.length, 12))}（${v.length}）`;
+}
+
 // DetailRow 一行详情 + 复制按钮。
 function DetailRow({label, value, mono, onCopy, copied}: {
   label: string;
@@ -104,6 +109,8 @@ export default function TaskDetailDialog({task, onClose}: Props) {
             }
           />
           <DetailRow label={t('状态')} value={statusLabel(task.status)} />
+          {/* 磁盘空间不足时任务依旧停在队列里，这里说清等什么，不让人误以为卡住了 */}
+          {task.blockReason && <DetailRow label={t('为何未开始')} value={task.blockReason} />}
           <DetailRow label={t('连接数')} value={String(task.connections)} />
           <DetailRow
             label={t('优先级')}
@@ -113,6 +120,24 @@ export default function TaskDetailDialog({task, onClose}: Props) {
             label={t('限速')}
             value={task.speedLimit > 0 ? formatSpeed(task.speedLimit) : t('跟随全局')}
           />
+          {task.cookie && (
+            <DetailRow
+              label={t('Cookie')}
+              value={maskSecret(task.cookie)}
+              mono
+              onCopy={() => copy(task.cookie ?? '', 'cookie')}
+              copied={copied === 'cookie'}
+            />
+          )}
+          {task.referer && (
+            <DetailRow
+              label={t('Referer')}
+              value={task.referer}
+              mono
+              onCopy={() => copy(task.referer ?? '', 'referer')}
+              copied={copied === 'referer'}
+            />
+          )}
           {formatDateTime(task.startAt) && (
             <DetailRow label={t('定时开始')} value={formatDateTime(task.startAt)} />
           )}

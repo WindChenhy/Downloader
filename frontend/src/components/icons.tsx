@@ -128,3 +128,12 @@ export function MonitorIcon({size}: IconProps) {
     </svg>
   );
 }
+
+export function ChartIcon({size}: IconProps) {
+  return (
+    <svg {...base(size)}>
+      <polyline points="3 16 9 9 13 13 21 5" />
+      <line x1="3" y1="20" x2="21" y2="20" />
+    </svg>
+  );
+}

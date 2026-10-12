@@ -8,10 +8,16 @@ import (
 
 // ExportTasksJSON 导出当前任务列表为 JSON（用于备份/迁移）。
 // 会清零瞬时 Speed，避免导入端误读。
-func (m *Manager) ExportTasksJSON() ([]byte, error) {
+// withAuth 为 false 时剥离每任务的 Cookie/Referer：这两项常常就是会话凭据，
+// 默认不随任务包外流（导出的 JSON 可能被贴进聊天窗口或提交到仓库）。
+func (m *Manager) ExportTasksJSON(withAuth bool) ([]byte, error) {
 	tasks := m.GetTasks()
 	for i := range tasks {
 		tasks[i].Speed = 0
+		if !withAuth {
+			tasks[i].Cookie = ""
+			tasks[i].Referer = ""
+		}
 	}
 	return json.MarshalIndent(tasks, "", "  ")
 }
@@ -54,6 +60,8 @@ func (m *Manager) ImportTasksJSON(data []byte) (BatchAddResult, error) {
 			Priority:         src.Priority,
 			StartAt:          startAt,
 			SpeedLimit:       src.SpeedLimit,
+			Cookie:           src.Cookie,
+			Referer:          src.Referer,
 		})
 		if err != nil {
 			out.Errors = append(out.Errors, fmt.Sprintf("第 %d 条（%s）: %v", i+1, truncateURL(src.URL), err))

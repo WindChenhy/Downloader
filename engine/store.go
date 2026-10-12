@@ -18,6 +18,7 @@ import (
 //
 //	settings.json     全局设置
 //	tasks.json        任务列表
+//	stats.json        下载统计（按天聚合 + 最近的速度曲线）
 //	state/<id>.json   各任务的断点续传状态（Sidecar）
 type Store struct {
 	dir string
@@ -27,20 +28,28 @@ func NewStore(dir string) *Store { return &Store{dir: dir} }
 
 func (s *Store) SettingsPath() string { return filepath.Join(s.dir, "settings.json") }
 func (s *Store) TasksPath() string    { return filepath.Join(s.dir, "tasks.json") }
+func (s *Store) StatsPath() string    { return filepath.Join(s.dir, "stats.json") }
 func (s *Store) StatePath(taskID string) string {
 	return filepath.Join(s.dir, "state", taskID+".json")
 }
 
 func writeJSONAtomic(path string, v any) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
+	return writeFileAtomic(path, data)
+}
+
+// writeFileAtomic 临时文件 + 重命名的原子写。权限取 0o600：数据目录里的
+// settings.json 含 API 令牌、tasks.json 含每任务 Cookie，都是本机敏感数据，
+// 不应被同机其他用户读到（Windows 上由 ACL 主导，Unix 上这几位是全部屏障）。
+func writeFileAtomic(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
 	}
 	// Windows 上目标文件可能被杀毒/备份/索引等外部进程短暂占用，
@@ -122,6 +131,19 @@ type Settings struct {
 	// Language 界面语言（zh-CN / en-US）：由前端解析"跟随系统"后同步而来，
 	// 供系统通知与托盘菜单使用
 	Language string `json:"language"`
+	// QueueSuspended 队列总闸：true 时不启动任何任务，已排队的任务停在 queued。
+	// 持久化，重启后保持闭闸；旧设置文件缺省该字段即为开闸（沿用原行为）
+	QueueSuspended bool `json:"queueSuspended"`
+	// WindowEnabled 带宽时间窗：启用后只在 [WindowStart, WindowEnd) 内启动新任务，
+	// 正在下载的任务不受影响。窗外与用户闭闸走同一条判定（见 dispatchLocked）
+	WindowEnabled bool   `json:"windowEnabled"`
+	WindowStart   string `json:"windowStart"` // "HH:MM"，本地时间
+	WindowEnd     string `json:"windowEnd"`   // "HH:MM"；与起点相同 = 全天放行
+	// DiskGuardOff 关闭下载前的磁盘空间预检查。字段刻意取反：老设置文件里没有这个键，
+	// 解码得到 false = 预检查开启（新字段默认值应为“开”的都这么写）
+	DiskGuardOff bool `json:"diskGuardOff"`
+	// DiskMinFree 预检查在文件大小之外还要为用户保留的余量（字节），0 = 不留余量
+	DiskMinFree int64 `json:"diskMinFree"`
 }
 
 func defaultSaveDir() string {
@@ -162,6 +184,8 @@ func defaultSettings() Settings {
 		NotifyOnComplete: true,
 		NotifyOnFail:     true,
 		AfterComplete:    AfterCompleteNone,
+		// 磁盘预检查默认开（DiskGuardOff 的零值即“开”）；余量默认 0，
+		// 只在真的装不下时才拦，要留安全边界由用户在设置里加
 	}
 }
 
@@ -184,6 +208,17 @@ func (s *Settings) normalize() {
 	}
 	if s.SpeedLimit < 0 {
 		s.SpeedLimit = 0
+	}
+	if s.DiskMinFree < 0 {
+		s.DiskMinFree = 0
+	}
+	// 时间窗只接受 HH:MM；非法值回落到 00:00（与另一项相同时 = 全天放行），
+	// 宁可不管也不要把队列永久锁死
+	if _, ok := parseHHMM(s.WindowStart); !ok {
+		s.WindowStart = "00:00"
+	}
+	if _, ok := parseHHMM(s.WindowEnd); !ok {
+		s.WindowEnd = "00:00"
 	}
 	switch s.ProxyMode {
 	case ProxySystem, ProxyCustom:

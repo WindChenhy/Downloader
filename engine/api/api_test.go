@@ -60,6 +60,7 @@ func newBackend(t *testing.T) *engine.Manager {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(m.Stop) // 停掉后台循环，别和 TempDir 清理抢目录
 	return m
 }
 
@@ -331,4 +332,288 @@ func TestSaveDirWhitelist(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("仅删记录应 200, got %d", resp.StatusCode)
 	}
+}
+
+// TestQueueEndpoints 队列总闸与批量操作的 REST 路径。
+func TestQueueEndpoints(t *testing.T) {
+	m := newBackend(t)
+	token := m.GetSettings().APIToken
+	api := httptest.NewServer(New(m).Handler())
+	defer api.Close()
+
+	// 闭闸
+	resp := apiDo(t, http.MethodPut, api.URL+"/api/v1/queue/suspended", token, "application/json", `{"suspended":true}`)
+	var gate map[string]bool
+	if err := json.NewDecoder(resp.Body).Decode(&gate); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if !gate["suspended"] {
+		t.Fatalf("闭闸回读 = %v", gate)
+	}
+	if !m.GetSettings().QueueSuspended {
+		t.Fatal("引擎未应用闭闸")
+	}
+
+	// 闭闸期间新建的任务停在 queued（该地址不存在，若真启动会立刻失败）
+	resp = apiDo(t, http.MethodPost, api.URL+"/api/v1/tasks", token, "application/json", `{"url":"http://127.0.0.1:1/x.zip"}`)
+	resp.Body.Close()
+	time.Sleep(200 * time.Millisecond)
+	tasks := apiTasks(t, api.URL, token)
+	if len(tasks) != 1 || tasks[0].Status != engine.StatusQueued {
+		t.Fatalf("闭闸期间任务应停在 queued: %+v", tasks)
+	}
+
+	// 暂停全部：排队中的任务也计入受影响数
+	resp = apiDo(t, http.MethodPost, api.URL+"/api/v1/queue/pause-all", token, "", "")
+	var counted map[string]int
+	if err := json.NewDecoder(resp.Body).Decode(&counted); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if counted["count"] != 1 {
+		t.Fatalf("pause-all count = %v, want 1", counted)
+	}
+	if got := apiTasks(t, api.URL, token)[0].Status; got != engine.StatusPaused {
+		t.Fatalf("pause-all 后状态 = %s", got)
+	}
+
+	// 恢复全部 → 开闸
+	resp = apiDo(t, http.MethodPost, api.URL+"/api/v1/queue/resume-all", token, "", "")
+	resp.Body.Close()
+	resp = apiDo(t, http.MethodPut, api.URL+"/api/v1/queue/suspended", token, "application/json", `{"suspended":false}`)
+	resp.Body.Close()
+	if m.GetSettings().QueueSuspended {
+		t.Fatal("开闸未生效")
+	}
+
+	// 清理已完成（当前无已完成任务 → 0，且不影响 paused/queued 校验）
+	resp = apiDo(t, http.MethodPost, api.URL+"/api/v1/queue/clear-completed", token, "", "")
+	if err := json.NewDecoder(resp.Body).Decode(&counted); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if counted["count"] != 0 {
+		t.Fatalf("clear-completed count = %v, want 0", counted)
+	}
+
+	// 闸门请求体必须是 JSON（守卫层已拦非 application/json）
+	resp = apiDo(t, http.MethodPut, api.URL+"/api/v1/queue/suspended", token, "text/plain", `{"suspended":true}`)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("text/plain 闸门请求应 403, got %d", resp.StatusCode)
+	}
+}
+
+// TestAddTaskFieldParity REST 新建任务的扩展字段（校验和/优先级/定时/每任务限速）
+// 必须真正落到任务上，而不是被请求体解码静默丢弃。
+func TestAddTaskFieldParity(t *testing.T) {
+	m := newBackend(t)
+	saveDir := m.GetSettings().SaveDir
+	st := m.GetSettings()
+	st.APIEnabled = false // 测试不真正监听端口
+	if err := m.SaveSettings(st); err != nil {
+		t.Fatal(err)
+	}
+	token := m.GetSettings().APIToken
+	api := httptest.NewServer(New(m).Handler())
+	defer api.Close()
+
+	// 定时设到未来：任务停在 queued，不会真去连一个不存在的地址
+	startAt := time.Now().Add(24 * time.Hour).Format(time.RFC3339)
+	sum := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	body := fmt.Sprintf(`{"url": "https://127.0.0.1:1/x.zip", "saveDir": %q, "connections": 2,`+
+		` "fileName": "custom.zip", "priority": 2, "speedLimit": 1048576,`+
+		` "startAt": %q, "checksumAlgo": "SHA256", "checksumExpected": %q}`, saveDir, startAt, sum)
+	resp := apiDo(t, http.MethodPost, api.URL+"/api/v1/tasks", token, "application/json", body)
+	if resp.StatusCode != http.StatusCreated {
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("新建任务状态码 = %d: %s", resp.StatusCode, b)
+	}
+	resp.Body.Close()
+
+	tasks := apiTasks(t, api.URL, token)
+	if len(tasks) != 1 {
+		t.Fatalf("任务数 = %d", len(tasks))
+	}
+	got := tasks[0]
+	if got.Status != engine.StatusQueued {
+		t.Fatalf("定时未到点应停在 queued, got %s", got.Status)
+	}
+	if got.Priority != engine.PriorityHigh || got.SpeedLimit != 1048576 {
+		t.Fatalf("优先级/每任务限速未生效: %+v", got)
+	}
+	if got.ChecksumAlgo != "sha256" || got.ChecksumExpected != sum {
+		t.Fatalf("校验和字段未生效: %+v", got)
+	}
+	if got.CustomName != "custom.zip" || got.FileName != "custom.zip" {
+		t.Fatalf("fileName 未落到自定义文件名: %+v", got)
+	}
+	if got.Connections != 2 {
+		t.Fatalf("连接数未生效: %+v", got)
+	}
+
+	// fileName 与 customName 同义；两者都给时 fileName 优先（对外文档用的是 fileName）
+	body = fmt.Sprintf(`{"url": "https://127.0.0.1:1/y.zip", "saveDir": %q,`+
+		` "fileName": "first.zip", "customName": "second.zip"}`, saveDir)
+	resp = apiDo(t, http.MethodPost, api.URL+"/api/v1/tasks", token, "application/json", body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("新建任务状态码 = %d", resp.StatusCode)
+	}
+	tasks = apiTasks(t, api.URL, token)
+	if len(tasks) != 2 {
+		t.Fatalf("任务数 = %d", len(tasks))
+	}
+	second := tasks[1]
+	if second.CustomName != "first.zip" {
+		t.Fatalf("fileName 应优先于 customName: %+v", second)
+	}
+
+	// 只写 customName 也应当生效
+	body = fmt.Sprintf(`{"url": "https://127.0.0.1:1/z.zip", "saveDir": %q, "customName": "named.zip"}`, saveDir)
+	resp = apiDo(t, http.MethodPost, api.URL+"/api/v1/tasks", token, "application/json", body)
+	resp.Body.Close()
+	tasks = apiTasks(t, api.URL, token)
+	if len(tasks) != 3 || tasks[2].CustomName != "named.zip" {
+		t.Fatalf("customName 应生效: %+v", tasks)
+	}
+
+	// 非法优先级夹到区间内而不是报错
+	body = fmt.Sprintf(`{"url": "https://127.0.0.1:1/w.zip", "saveDir": %q, "priority": 9}`, saveDir)
+	resp = apiDo(t, http.MethodPost, api.URL+"/api/v1/tasks", token, "application/json", body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("非法优先级应夹取而非拒绝, got %d", resp.StatusCode)
+	}
+	tasks = apiTasks(t, api.URL, token)
+	if last := tasks[len(tasks)-1]; last.Priority != engine.PriorityHigh {
+		t.Fatalf("非法优先级未夹到最高: %+v", last)
+	}
+}
+
+// TestQueueWindowAndStatsEndpoints 带宽时间窗、队列放行状态与统计的 REST 路径。
+func TestQueueWindowAndStatsEndpoints(t *testing.T) {
+	m := newBackend(t)
+	token := m.GetSettings().APIToken
+	api := httptest.NewServer(New(m).Handler())
+	defer api.Close()
+
+	// 时间格式非法 → 400（调用方的输入问题，不该记 500）
+	resp := apiDo(t, http.MethodPut, api.URL+"/api/v1/queue/window", token, "application/json", `{"enabled":true,"start":"7pm","end":"06:00"}`)
+	got := resp.StatusCode
+	resp.Body.Close()
+	if got != http.StatusBadRequest {
+		t.Fatalf("非法时间应 400, got %d", got)
+	}
+
+	// 窗口设在当下之外的两小时：无论怎么绕，now 都不在 [now+2h, now+3h) 内
+	now := time.Now()
+	body := fmt.Sprintf(`{"enabled":true,"start":"%s","end":"%s"}`,
+		now.Add(2*time.Hour).Format("15:04"), now.Add(3*time.Hour).Format("15:04"))
+	resp = apiDo(t, http.MethodPut, api.URL+"/api/v1/queue/window", token, "application/json", body)
+	got = resp.StatusCode
+	resp.Body.Close()
+	if got != http.StatusOK {
+		t.Fatalf("设置时间窗应 200, got %d", got)
+	}
+
+	var st engine.QueueStatus
+	resp = apiDo(t, http.MethodGet, api.URL+"/api/v1/queue/status", token, "", "")
+	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if !st.WindowEnabled || st.WindowActive || st.Active || st.OpensAt == "" {
+		t.Fatalf("窗外状态 = %+v", st)
+	}
+
+	resp = apiDo(t, http.MethodPost, api.URL+"/api/v1/tasks", token, "application/json", `{"url":"http://127.0.0.1:1/a.zip"}`)
+	resp.Body.Close()
+	time.Sleep(300 * time.Millisecond)
+	if gs := apiTasks(t, api.URL, token); len(gs) != 1 || gs[0].Status != engine.StatusQueued {
+		t.Fatalf("窗外任务应停在 queued: %+v", gs)
+	}
+
+	var stats engine.Stats
+	resp = apiDo(t, http.MethodGet, api.URL+"/api/v1/stats", token, "", "")
+	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if stats.TaskCount != 1 || stats.Queued != 1 || stats.WindowMs <= 0 {
+		t.Fatalf("统计读数 = %+v", stats)
+	}
+
+	// 关掉时间窗：立即放行（地址不可达会失败，但不该停在队列里）
+	resp = apiDo(t, http.MethodPut, api.URL+"/api/v1/queue/window", token, "application/json",
+		`{"enabled":false,"start":"00:00","end":"00:00"}`)
+	resp.Body.Close()
+	waitFor(t, func() bool {
+		tasks := apiTasks(t, api.URL, token)
+		return len(tasks) == 1 && tasks[0].Status != engine.StatusQueued
+	}, 15*time.Second)
+}
+
+// TestTaskStatsEndpoint 单任务曲线端点：运行中任务 200，无统计记录 404。
+// GET /api/v1/stats 的汇总不再带 samples，曲线走这个按需端点。
+func TestTaskStatsEndpoint(t *testing.T) {
+	content := make([]byte, 10000)
+	rs := &rangeServer{content: content, gate: make(chan struct{})}
+	srv := httptest.NewServer(rs)
+	defer srv.Close()
+
+	m := newBackend(t)
+	token := m.GetSettings().APIToken
+	api := httptest.NewServer(New(m).Handler())
+	defer api.Close()
+
+	body := fmt.Sprintf(`{"url": %q, "saveDir": %q, "connections": 2}`, srv.URL, m.GetSettings().SaveDir)
+	resp := apiDo(t, http.MethodPost, api.URL+"/api/v1/tasks", token, "application/json", body)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("新建任务状态码 = %d", resp.StatusCode)
+	}
+	var task engine.Task
+	if err := json.NewDecoder(resp.Body).Decode(&task); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	// gate 挡住下载，任务停在 running；统计条目由进度循环采样建立，有节奏
+	waitFor(t, func() bool {
+		tasks := apiTasks(t, api.URL, token)
+		if len(tasks) != 1 || tasks[0].Status != engine.StatusRunning {
+			return false
+		}
+		_, ok := m.GetTaskStats(task.ID)
+		return ok
+	}, 5*time.Second)
+
+	var ts engine.TaskStat
+	resp = apiDo(t, http.MethodGet, api.URL+"/api/v1/stats/tasks/"+task.ID, token, "", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("单任务统计状态码 = %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&ts); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if ts.TaskID != task.ID || ts.FileName == "" {
+		t.Fatalf("单任务统计 = %+v", ts)
+	}
+
+	// 没有统计记录的 ID → 404
+	resp = apiDo(t, http.MethodGet, api.URL+"/api/v1/stats/tasks/no-such-id", token, "", "")
+	got := resp.StatusCode
+	resp.Body.Close()
+	if got != http.StatusNotFound {
+		t.Fatalf("不存在的任务统计应 404, got %d", got)
+	}
+
+	close(rs.gate) // 放行，等下载收尾再让 TempDir 清理（.part 句柄会关掉）
+	waitFor(t, func() bool {
+		tasks := apiTasks(t, api.URL, token)
+		return len(tasks) == 1 && tasks[0].Status == engine.StatusCompleted
+	}, 15*time.Second)
 }

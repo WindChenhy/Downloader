@@ -169,7 +169,7 @@ func TestExportImportTasks(t *testing.T) {
 	}
 	waitFor(t, func() bool { return m.GetTasks()[0].Status == StatusCompleted }, 10*time.Second)
 
-	data, err := m.ExportTasksJSON()
+	data, err := m.ExportTasksJSON(false)
 	if err != nil {
 		t.Fatal(err)
 	}

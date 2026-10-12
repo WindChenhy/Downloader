@@ -126,6 +126,80 @@ const EN: Record<string, string> = {
   '排序失败：{e}': 'Reorder failed: {e}',
   '打开目录失败：{e}': 'Failed to open folder: {e}',
 
+  // 队列批量操作
+  '暂停队列': 'Pause queue',
+  '恢复队列': 'Resume queue',
+  '闭闸后不再启动任何任务，正在下载的不受影响':
+    'While closed no task starts; downloads in progress are unaffected',
+  '开闸后已排队的任务会按优先级继续启动': 'Queued tasks start by priority once reopened',
+  '队列已暂停，任务不会开始': 'Queue is paused — tasks will not start',
+  '暂停全部': 'Pause all',
+  '恢复全部': 'Resume all',
+  '暂停所有排队中与下载中的任务': 'Pause all queued and running tasks',
+  '恢复所有已暂停与失败的任务': 'Resume all paused and failed tasks',
+  '已暂停 {n} 个任务': 'Paused {n} task(s)',
+  '已暂停 {n} 个任务，运行中的已停止': 'Paused {n} task(s); running ones were stopped',
+  '已恢复 {n} 个任务': 'Resumed {n} task(s)',
+  '重试 {n} 个失败': 'Retry {n} failed',
+  '已重试 {n} 个失败任务': 'Retried {n} failed task(s)',
+  '清理 {n} 个已完成': 'Clear {n} completed',
+  '已清理 {n} 条已完成记录': 'Cleared {n} completed record(s)',
+  '再次点击确认：仅移除记录，文件保留在磁盘':
+    'Click again to confirm: records only, files stay on disk',
+  '队列': 'Queue',
+  '闭闸后不再启动任何任务，正在下载的不受影响；重启后保持':
+    'While closed no task starts and downloads in progress are unaffected; the state survives restarts',
+
+  // 队列停摆原因（闸门 / 时间窗 / 磁盘空间）
+  '带宽时间窗外，{v} 自动放行': 'Outside the bandwidth window — resumes at {v}',
+  '{n} 个任务因磁盘空间不足停在队列里': '{n} task(s) are waiting in the queue for disk space',
+  '{n} 个任务定时未到点': '{n} task(s) are waiting for their scheduled start time',
+  '腾出空间后会自动继续下载': 'Resumes automatically once space is freed',
+  '为何未开始': 'Why it has not started',
+
+  // 带宽时间窗与磁盘预检查设置
+  '带宽时间窗': 'Bandwidth window',
+  '只在指定时段内启动新任务；正在下载的任务不会被中断，窗外等于自动闭闸':
+    'New tasks start only inside the given hours; running downloads are not interrupted — outside the window acts like a closed gate',
+  '带宽时间窗开始': 'Window starts',
+  '带宽时间窗结束': 'Window ends',
+  '起止时间相同：等于全天放行': 'Same start and end time: allowed all day',
+  '结束时间早于开始时间：视为跨零点（如 22:00–06:00）':
+    'End earlier than start: treated as crossing midnight (e.g. 22:00–06:00)',
+  '到点自动放行排队任务，无需手动开闸': 'Queued tasks start when the window opens, no manual reopen',
+  '磁盘': 'Disk',
+  '下载前检查磁盘空间': 'Check disk space before downloading',
+  '装不下时任务停在队列里并说明原因，腾出空间后自动继续下载':
+    'Tasks that would not fit stay queued with the reason shown and resume once space frees',
+  '额外保留空间（MB，0 不留）': 'Space to keep free (MB, 0 = keep nothing)',
+
+  // 下载统计与速度曲线
+  '下载统计': 'Download stats',
+  '读取统计失败：{e}': 'Failed to read stats: {e}',
+  '今日下载量': 'Today',
+  '按天累计，跨重启保留': 'Summed per day, survives restarts',
+  '近 7 天': 'Last 7 days',
+  '累计下载量': 'All time',
+  '最多保留 {n} 天': 'Keeps up to {n} days',
+  '当前速度': 'Current speed',
+  '空闲': 'Idle',
+  '最近一次采样（{n}）': 'Last sample ({n})',
+  '窗口内峰值': 'Peak in window',
+  '窗口内均速': 'Average in window',
+  '速度曲线': 'Speed curve',
+  '暂无速度采样': 'No speed samples yet',
+  '全部任务合计，只记有下载在跑的时段': 'All tasks combined; only periods with activity are recorded',
+  '每日下载量': 'Daily volume',
+  '单个任务': 'Per task',
+  '还没有下载记录': 'No downloads yet',
+  '任务': 'Task',
+  '下载量': 'Downloaded',
+  '峰值': 'Peak',
+  '曲线保留最近 15 个任务，更早的只留汇总':
+    'Curves are kept for the 15 most recent tasks; older ones keep their summary only',
+  '今日结束的任务': 'Finished today',
+  '当前队列': 'Queue now',
+
   // 校验和
   '校验通过': 'Checksum OK',
   '校验失败': 'Checksum mismatch',
@@ -160,6 +234,14 @@ const EN: Record<string, string> = {
   '下载链接': 'URL(s)',
   '已识别 {n} 条': '{n} URL(s) detected',
   '（批量）': '(batch)',
+  '认证（可选）': 'Authentication (optional)',
+  ' · 已填写': ' · filled in',
+  '从浏览器复制，如 sid=abc; token=def': 'Copy from the browser, e.g. sid=abc; token=def',
+  '防盗链站点常需，如 https://site.example/page':
+    'Often required by hotlink protection, e.g. https://site.example/page',
+  '导出时包含 Cookie / Referer': 'Include Cookie / Referer in exports',
+  '这两项常含会话凭据，默认剥离；仅在自己迁移任务包时勾选':
+    'These usually carry session credentials and are stripped by default; enable only when migrating task packs',
   '重命名（留空自动从链接获取）': 'Rename (leave empty to detect from the URL)',
   '批量时忽略': 'Ignored in batch mode',
   '可选，如： ubuntu-24.04.iso': 'Optional, e.g. ubuntu-24.04.iso',

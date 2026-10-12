@@ -57,5 +57,6 @@ func mustManagerWithClient(t *testing.T, rt http.RoundTripper) (*Manager, string
 	if err != nil {
 		t.Fatal(err)
 	}
+	stopOnCleanup(t, m)
 	return m, t.TempDir()
 }

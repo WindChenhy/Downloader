@@ -3,6 +3,7 @@ package engine
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +32,62 @@ BadLineWithoutColon
 	}
 	if len(parseExtraHeaders("")) != 0 {
 		t.Fatal("空输入应得到空 map")
+	}
+}
+
+// TestParseExtraHeadersCanonicalizesKey 小写手填的 cookie 必须归一到 Cookie：
+// 每任务认证头靠 extraHeaders["Cookie"] 覆盖全局同名项，两个同义键共存时
+// 谁生效取决于 map 的随机迭代顺序，同一文件的不同分段可能带不同 Cookie。
+func TestParseExtraHeadersCanonicalizesKey(t *testing.T) {
+	got := parseExtraHeaders("cookie: a=1\nx-trace: 1\nREFERER: https://b.example")
+	if len(got) != 3 {
+		t.Fatalf("归一后不应出现同义重复键: %v", got)
+	}
+	for k := range got {
+		if k != http.CanonicalHeaderKey(k) {
+			t.Fatalf("key %q 未规范化", k)
+		}
+	}
+	if got["Cookie"] != "a=1" || got["Referer"] != "https://b.example" || got["X-Trace"] != "1" {
+		t.Fatalf("归一后取值错误: %v", got)
+	}
+}
+
+// TestSameSite 同站判定：同主机、同一注册域（含子域、跨多段后缀）算同站；
+// 异站、https→http 降级、IP 不同字面量都算异站（凭据不得外带）。
+func TestSameSite(t *testing.T) {
+	u := func(s string) *url.URL {
+		parsed, err := url.Parse(s)
+		if err != nil {
+			t.Fatalf("解析 %q 失败: %v", s, err)
+		}
+		return parsed
+	}
+	same := [][2]string{
+		{"https://dl.example.com/f.bin", "https://dl.example.com/g.bin"},
+		{"https://dl.example.com/f.bin", "https://cdn.dl.example.com/f.bin"}, // 子域
+		{"https://a.example.co.uk/f", "https://b.example.co.uk/f"},           // 多段后缀
+		{"http://example.com/f", "http://www.example.com/f"},
+		{"https://EXAMPLE.com/f", "https://cdn.example.com/f"}, // 大小写不敏感
+	}
+	for _, pair := range same {
+		if !sameSite(u(pair[0]), u(pair[1])) {
+			t.Fatalf("%s → %s 应判为同站", pair[0], pair[1])
+		}
+	}
+	diff := [][2]string{
+		{"https://dl.example.com/f.bin", "https://cdn.other.com/f.bin"},
+		{"https://example.com/f", "https://example.co.uk/f"},            // 注册域不同
+		{"https://dl.example.com/f.bin", "http://dl.example.com/f.bin"}, // 协议降级
+		{"https://127.0.0.1/f.bin", "https://127.0.0.2/f.bin"},          // IP 字面量
+	}
+	for _, pair := range diff {
+		if sameSite(u(pair[0]), u(pair[1])) {
+			t.Fatalf("%s → %s 应判为异站", pair[0], pair[1])
+		}
+	}
+	if sameSite(u("https://dl.example.com/f"), nil) {
+		t.Fatal("nil URL 应判为异站")
 	}
 }
 

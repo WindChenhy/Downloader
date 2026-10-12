@@ -20,6 +20,8 @@ func TestScheduledTaskStartsWithFakeClock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 假时钟会跳过统计的 30s 落盘节流，不停掉循环就会和 TempDir 清理抢同一个目录
+	stopOnCleanup(t, m)
 	saveDir := t.TempDir()
 
 	future := current.Add(1 * time.Hour).Format(time.RFC3339)
@@ -32,12 +34,13 @@ func TestScheduledTaskStartsWithFakeClock(t *testing.T) {
 		t.Fatalf("未到点应保持 queued, got %s", got)
 	}
 
-	// 推进假时钟并重触发调度（SetTaskStartAt 会重新 dispatch）→ 立即启动
+	// 推进假时钟并重触发调度（SetTaskStartAt 会重新 dispatch）→ 立即启动并跑完
+	// （等到结束再退出用例：否则下载中的文件会和 TempDir 清理撞车）
 	current = current.Add(2 * time.Hour)
 	if err := m.SetTaskStartAt(tk.ID, future); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		return m.GetTasks()[0].Status == StatusRunning
-	}, 5*time.Second)
+		return m.GetTasks()[0].Status == StatusCompleted
+	}, 10*time.Second)
 }

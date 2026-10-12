@@ -8,9 +8,15 @@ export function AddTasks(arg1:Array<engine.AddTaskParams>):Promise<engine.BatchA
 
 export function ApplyCloseAction(arg1:string,arg2:boolean):Promise<void>;
 
-export function ExportTasksJSON():Promise<string>;
+export function ClearCompleted():Promise<number>;
+
+export function ExportTasksJSON(arg1:boolean):Promise<string>;
 
 export function GetSettings():Promise<engine.Settings>;
+
+export function GetStats():Promise<engine.Stats>;
+
+export function GetTaskStats(arg1:string):Promise<engine.TaskStat|boolean>;
 
 export function GetTasks():Promise<Array<engine.Task>>;
 
@@ -20,15 +26,27 @@ export function MoveTask(arg1:string,arg2:number):Promise<void>;
 
 export function OpenFolder(arg1:string,arg2:string):Promise<void>;
 
+export function PauseAll():Promise<number>;
+
 export function PauseTask(arg1:string):Promise<void>;
+
+export function QueueStatus():Promise<engine.QueueStatus>;
 
 export function Quit():Promise<void>;
 
 export function RemoveTask(arg1:string,arg2:boolean):Promise<void>;
 
+export function ResumeAll():Promise<number>;
+
 export function ResumeTask(arg1:string):Promise<void>;
 
+export function RetryAllFailed():Promise<number>;
+
 export function SaveSettings(arg1:engine.Settings):Promise<void>;
+
+export function SetQueueSuspended(arg1:boolean):Promise<void>;
+
+export function SetQueueWindow(arg1:boolean,arg2:string,arg3:string):Promise<void>;
 
 export function SetTaskPriority(arg1:string,arg2:number):Promise<void>;
 
