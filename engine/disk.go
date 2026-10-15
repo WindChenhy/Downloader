@@ -64,7 +64,7 @@ func (m *Manager) spaceChecksLocked(t Task) []spaceCheck {
 	need := fileNeed(t)
 	staging := m.stagingDir()
 	checks := []spaceCheck{{dir: staging, need: need}}
-	if volumeKey(t.SaveDir) != volumeKey(staging) {
+	if m.cachedVolumeLocked(t.SaveDir) != m.cachedVolumeLocked(staging) {
 		total := t.TotalSize
 		if total <= 0 {
 			total = -1 // 大小未知：只按余量阈值检查
@@ -74,10 +74,27 @@ func (m *Manager) spaceChecksLocked(t Task) []spaceCheck {
 	return checks
 }
 
+// cachedVolumeLocked 返回 dir 所在的卷标识，结果按目录缓存（mu 保护）。
+// volumeKey 要沿路径逐级 os.Stat 上溯直到找到存在的祖先，而
+// refreshSpaceBlockLocked 每 500ms 会对每个排队任务各跑一次；不缓存的话
+// 几十个排队任务就是每秒上百次持锁 syscall，慢盘上直接拖住进度循环。
+// 缓存条目按目录去重（保存目录 + 暂存目录），数量有限。
+func (m *Manager) cachedVolumeLocked(dir string) string {
+	if v, ok := m.volCache[dir]; ok {
+		return v
+	}
+	v := volumeKey(dir)
+	if m.volCache == nil {
+		m.volCache = make(map[string]string)
+	}
+	m.volCache[dir] = v
+	return v
+}
+
 // cachedFreeLocked 返回 dir 所在卷的剩余字节，按卷缓存 spaceProbeTTL。
 // 调用方须持有 mu。
 func (m *Manager) cachedFreeLocked(dir string, now time.Time) (int64, error) {
-	key := volumeKey(dir)
+	key := m.cachedVolumeLocked(dir)
 	if p, ok := m.spaceCache[key]; ok && now.Sub(p.at) < spaceProbeTTL {
 		return p.free, p.err
 	}
@@ -113,7 +130,7 @@ func (m *Manager) spaceBlockLocked(t Task, now time.Time) string {
 		}
 		if need > avail {
 			msg := fmt.Sprintf("磁盘空间不足：%s 剩余 %s，本任务还需 %s",
-				volumeKey(c.dir), humanBytes(free), humanBytes(need))
+				m.cachedVolumeLocked(c.dir), humanBytes(free), humanBytes(need))
 			if margin > 0 {
 				msg += fmt.Sprintf("（另预留 %s）", humanBytes(margin))
 			}

@@ -96,6 +96,15 @@ func (s *Server) Sync() {
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			fmt.Fprintln(os.Stderr, "REST API 启动失败:", err)
+			// 启动失败（端口被占用等）要把实例摘掉，否则 srv 与 addr 都还在，
+			// 后续 Sync 会认为"地址没变、已在运行"而直接返回，端口空出来后
+			// 也不会再试一次
+			s.mu.Lock()
+			if s.srv == srv {
+				s.srv = nil
+				s.addr = ""
+			}
+			s.mu.Unlock()
 		}
 	}()
 }

@@ -3,10 +3,9 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 
 	"downloader/engine"
@@ -16,6 +15,10 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
+
+// errNotReady 引擎尚未初始化。startup 里数据目录不可用时应用会走退出流程，
+// 但在真正退出之前前端仍可能调用绑定方法，这里统一挡住而不是让 nil 解引用崩掉。
+var errNotReady = errors.New("应用尚未初始化")
 
 // App 暴露给前端的绑定对象，所有导出方法均可在 JS 中调用。
 type App struct {
@@ -30,9 +33,13 @@ type App struct {
 	notifyCreate, notifyPause, notifyComplete, notifyFail atomic.Bool
 	// uiLang 界面语言缓存（zh-CN / en-US），随设置同步；通知与托盘文案使用
 	uiLang atomic.Value
+	// clipboardStop 关闭后剪贴板监听退出；clipboardOnce 保证只关一次
+	// （requestQuit 与 shutdown 都可能走到收尾）
+	clipboardStop chan struct{}
+	clipboardOnce sync.Once
 }
 
-func NewApp() *App { return &App{} }
+func NewApp() *App { return &App{clipboardStop: make(chan struct{})} }
 
 // startup Wails 启动回调：初始化引擎、通知、REST API、剪贴板与托盘。
 func (a *App) startup(ctx context.Context) {
@@ -98,76 +105,156 @@ func (a *App) startup(ctx context.Context) {
 }
 
 // GetTasks 返回全部任务（含实时进度）。
-func (a *App) GetTasks() []engine.Task { return a.mgr.GetTasks() }
+func (a *App) GetTasks() []engine.Task {
+	if a.mgr == nil {
+		return nil
+	}
+	return a.mgr.GetTasks()
+}
 
 // AddTask 新建下载任务；saveDir 为空时使用设置中的默认目录，
 // connections <= 0 时使用默认连接数，customName 为空则自动从链接/响应头获取文件名。
 func (a *App) AddTask(url string, saveDir string, connections int, customName string) (engine.Task, error) {
+	if a.mgr == nil {
+		return engine.Task{}, errNotReady
+	}
 	return a.mgr.AddTask(url, saveDir, connections, customName)
 }
 
 // AddTasks 批量新建下载任务；每条含可选校验和。
 func (a *App) AddTasks(items []engine.AddTaskParams) engine.BatchAddResult {
+	if a.mgr == nil {
+		return engine.BatchAddResult{}
+	}
 	return a.mgr.AddTasks(items)
 }
 
-func (a *App) PauseTask(id string) error  { return a.mgr.PauseTask(id) }
-func (a *App) ResumeTask(id string) error { return a.mgr.ResumeTask(id) }
+func (a *App) PauseTask(id string) error {
+	if a.mgr == nil {
+		return errNotReady
+	}
+	return a.mgr.PauseTask(id)
+}
+
+func (a *App) ResumeTask(id string) error {
+	if a.mgr == nil {
+		return errNotReady
+	}
+	return a.mgr.ResumeTask(id)
+}
 
 // PauseAll 暂停全部未结束的任务（排队中立即暂停，运行中的取消本轮），返回受影响任务数。
-func (a *App) PauseAll() int { return a.mgr.PauseAll() }
+func (a *App) PauseAll() int {
+	if a.mgr == nil {
+		return 0
+	}
+	return a.mgr.PauseAll()
+}
 
 // ResumeAll 恢复全部已暂停与已失败的任务；队列总闸关闭时任务停在排队中。
-func (a *App) ResumeAll() int { return a.mgr.ResumeAll() }
+func (a *App) ResumeAll() int {
+	if a.mgr == nil {
+		return 0
+	}
+	return a.mgr.ResumeAll()
+}
 
 // RetryAllFailed 仅重试失败任务，不动已暂停的任务。
-func (a *App) RetryAllFailed() int { return a.mgr.RetryAllFailed() }
+func (a *App) RetryAllFailed() int {
+	if a.mgr == nil {
+		return 0
+	}
+	return a.mgr.RetryAllFailed()
+}
 
 // ClearCompleted 移除全部已完成任务的记录，磁盘上的文件保留。
-func (a *App) ClearCompleted() int { return a.mgr.ClearCompleted() }
+func (a *App) ClearCompleted() int {
+	if a.mgr == nil {
+		return 0
+	}
+	return a.mgr.ClearCompleted()
+}
 
 // SetQueueSuspended 开关队列总闸：闭闸后不再启动任何任务，状态跨重启保持。
-func (a *App) SetQueueSuspended(v bool) error { return a.mgr.SetQueueSuspended(v) }
+func (a *App) SetQueueSuspended(v bool) error {
+	if a.mgr == nil {
+		return errNotReady
+	}
+	return a.mgr.SetQueueSuspended(v)
+}
 
 // QueueStatus 队列放行状态：用户总闸、带宽时间窗、因磁盘空间不足停在队列里的任务数。
 // 三者都会让任务停在「排队中」，界面据此区分文案。
-func (a *App) QueueStatus() engine.QueueStatus { return a.mgr.QueueStatus() }
+func (a *App) QueueStatus() engine.QueueStatus {
+	if a.mgr == nil {
+		return engine.QueueStatus{}
+	}
+	return a.mgr.QueueStatus()
+}
 
 // SetQueueWindow 配置带宽时间窗：窗外不启动新任务（正在下载的不受影响），状态持久化。
 func (a *App) SetQueueWindow(enabled bool, start, end string) error {
+	if a.mgr == nil {
+		return errNotReady
+	}
 	return a.mgr.SetQueueWindow(enabled, start, end)
 }
 
 // GetStats 返回下载统计与速度曲线（统计页轮询用）。
-func (a *App) GetStats() engine.Stats { return a.mgr.GetStats() }
+func (a *App) GetStats() engine.Stats {
+	if a.mgr == nil {
+		return engine.Stats{}
+	}
+	return a.mgr.GetStats()
+}
 
 // GetTaskStats 返回单任务曲线（统计页选中任务时按需拉取；GetStats 的
 // 任务汇总不再携带 Samples，避免每次轮询全量序列化）。
 func (a *App) GetTaskStats(id string) (engine.TaskStat, bool) {
+	if a.mgr == nil {
+		return engine.TaskStat{}, false
+	}
 	return a.mgr.GetTaskStats(id)
 }
 
 // SetTaskPriority 设置任务优先级（0 低 / 1 普通 / 2 高）。
 func (a *App) SetTaskPriority(id string, priority int) error {
+	if a.mgr == nil {
+		return errNotReady
+	}
 	return a.mgr.SetTaskPriority(id, priority)
 }
 
 // MoveTask 列表内上下移动（-1 上移 / +1 下移）。
-func (a *App) MoveTask(id string, delta int) error { return a.mgr.MoveTask(id, delta) }
+func (a *App) MoveTask(id string, delta int) error {
+	if a.mgr == nil {
+		return errNotReady
+	}
+	return a.mgr.MoveTask(id, delta)
+}
 
 // SetTaskSpeedLimit 设置每任务限速（字节/秒，0 跟随全局）。
 func (a *App) SetTaskSpeedLimit(id string, limit int64) error {
+	if a.mgr == nil {
+		return errNotReady
+	}
 	return a.mgr.SetTaskSpeedLimit(id, limit)
 }
 
 // SetTaskStartAt 设置定时开始时间（RFC3339，空串表示立即）。
 func (a *App) SetTaskStartAt(id string, startAt string) error {
+	if a.mgr == nil {
+		return errNotReady
+	}
 	return a.mgr.SetTaskStartAt(id, startAt)
 }
 
 // ExportTasksJSON 导出任务列表 JSON 字符串（前端触发下载）。
 // withAuth 为 true 时才带出每任务的 Cookie/Referer——这两项常含会话凭据，默认剥离。
 func (a *App) ExportTasksJSON(withAuth bool) (string, error) {
+	if a.mgr == nil {
+		return "", errNotReady
+	}
 	data, err := a.mgr.ExportTasksJSON(withAuth)
 	if err != nil {
 		return "", err
@@ -177,6 +264,9 @@ func (a *App) ExportTasksJSON(withAuth bool) (string, error) {
 
 // ImportTasksJSON 导入任务列表 JSON。
 func (a *App) ImportTasksJSON(data string) engine.BatchAddResult {
+	if a.mgr == nil {
+		return engine.BatchAddResult{Errors: []string{errNotReady.Error()}}
+	}
 	res, err := a.mgr.ImportTasksJSON([]byte(data))
 	if err != nil {
 		return engine.BatchAddResult{Errors: []string{err.Error()}}
@@ -213,14 +303,25 @@ func (a *App) onQueueIdle() {
 
 // RemoveTask 删除任务记录；deleteFiles 为 true 时连同已下载文件一起删除。
 func (a *App) RemoveTask(id string, deleteFiles bool) error {
+	if a.mgr == nil {
+		return errNotReady
+	}
 	return a.mgr.RemoveTask(id, deleteFiles)
 }
 
 // GetSettings 返回全局设置。
-func (a *App) GetSettings() engine.Settings { return a.mgr.GetSettings() }
+func (a *App) GetSettings() engine.Settings {
+	if a.mgr == nil {
+		return engine.Settings{}
+	}
+	return a.mgr.GetSettings()
+}
 
 // SaveSettings 保存设置并同步通知开关缓存与 REST API 启停。
 func (a *App) SaveSettings(s engine.Settings) error {
+	if a.mgr == nil {
+		return errNotReady
+	}
 	if err := a.mgr.SaveSettings(s); err != nil {
 		return err
 	}
@@ -231,23 +332,22 @@ func (a *App) SaveSettings(s engine.Settings) error {
 
 // ShowWindow 显示并激活主窗口（托盘菜单使用）。
 func (a *App) ShowWindow() {
+	if a.ctx == nil {
+		return
+	}
 	runtime.WindowUnminimise(a.ctx)
 	runtime.WindowShow(a.ctx)
 }
 
-// OpenFolder 在资源管理器中打开任务所在目录；
-// 目标文件已存在时（如已完成）直接选中该文件。
+// OpenFolder 在文件管理器中定位任务文件；目标文件不存在时打开所在目录。
+// 各平台的命令差异交给 sysaction，避免把 explorer 硬编码在这里
+// （项目有 macOS 构建产物，explorer 在那里不存在）。
 func (a *App) OpenFolder(saveDir string, fileName string) error {
 	dir, err := filepath.Abs(saveDir)
 	if err != nil {
 		return err
 	}
-	target := filepath.Join(dir, fileName)
-	if st, err := os.Stat(target); err == nil && !st.IsDir() {
-		// explorer 接受 "/select,带空格路径" 整体加引号的形式
-		return exec.Command("explorer", "/select,"+target).Start()
-	}
-	return exec.Command("explorer", dir).Start()
+	return sysaction.RevealFile(dir, fileName)
 }
 
 // onSecondInstanceLaunch 用户再次双击 exe 时被首个实例调用：
@@ -293,10 +393,10 @@ func (a *App) onBeforeClose(ctx context.Context) (prevent bool) {
 // action: exit | minimize；remember 为 true 时写入设置，之后不再询问。
 func (a *App) ApplyCloseAction(action string, remember bool) error {
 	if a.mgr == nil {
-		return fmt.Errorf("应用尚未初始化")
+		return errNotReady
 	}
 	if action != engine.CloseActionExit && action != engine.CloseActionMinimize {
-		return fmt.Errorf("无效的关闭操作: %s", action)
+		return errors.New("无效的关闭操作: " + action)
 	}
 	if remember {
 		st := a.mgr.GetSettings()
@@ -333,8 +433,15 @@ func (a *App) requestQuit() {
 func (a *App) shutdown(ctx context.Context) {
 	a.quitting.Store(true)
 	quitTray()
+	a.stopClipboard()
 	// 停掉后台进度循环并强制落盘统计（平时 30s 节流），否则最后一段采样白丢
 	if a.mgr != nil {
 		_ = a.mgr.Close()
 	}
+}
+
+// stopClipboard 停止剪贴板监听 goroutine（幂等）。
+// 不关的话它会一直每 1.5s 轮询剪贴板，退出过程中还在调 Wails 运行时。
+func (a *App) stopClipboard() {
+	a.clipboardOnce.Do(func() { close(a.clipboardStop) })
 }

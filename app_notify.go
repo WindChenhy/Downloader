@@ -36,16 +36,25 @@ func (a *App) text(zh, en string) string {
 	return zh
 }
 
+// 通知类别。用常量而不是字符串字面量：拼错时编译期就报错，
+// 而不是静默落进 default 分支，让某类通知永远弹不出来还查不到原因。
+const (
+	notifyKindCreate   = "create"
+	notifyKindPause    = "pause"
+	notifyKindComplete = "complete"
+	notifyKindFail     = "fail"
+)
+
 // notifyEnabled 读取缓存的通知开关（可在 notify 回调中安全调用）。
 func (a *App) notifyEnabled(kind string) bool {
 	switch kind {
-	case "create":
+	case notifyKindCreate:
 		return a.notifyCreate.Load()
-	case "pause":
+	case notifyKindPause:
 		return a.notifyPause.Load()
-	case "complete":
+	case notifyKindComplete:
 		return a.notifyComplete.Load()
-	case "fail":
+	case notifyKindFail:
 		return a.notifyFail.Load()
 	default:
 		return false
@@ -66,7 +75,7 @@ func (a *App) sendSysNotification(id, title, body string) {
 
 // notifyTaskCreated 创建下载任务时弹系统通知（默认关闭）。
 func (a *App) notifyTaskCreated(t engine.Task) {
-	if !a.notifyEnabled("create") {
+	if !a.notifyEnabled(notifyKindCreate) {
 		return
 	}
 	a.sendSysNotification("task-created-"+t.ID, a.text("已创建下载任务", "Download task created"), t.FileName)
@@ -74,7 +83,7 @@ func (a *App) notifyTaskCreated(t engine.Task) {
 
 // notifyTaskPaused 下载任务暂停时弹系统通知（默认关闭）。
 func (a *App) notifyTaskPaused(t engine.Task) {
-	if !a.notifyEnabled("pause") {
+	if !a.notifyEnabled(notifyKindPause) {
 		return
 	}
 	a.sendSysNotification("task-paused-"+t.ID, a.text("下载已暂停", "Download paused"), t.FileName)
@@ -83,7 +92,7 @@ func (a *App) notifyTaskPaused(t engine.Task) {
 // notifyTaskFinished 任务完成/失败时弹系统通知（默认开启）。
 func (a *App) notifyTaskFinished(t engine.Task) {
 	if t.Status == engine.StatusFailed {
-		if !a.notifyEnabled("fail") {
+		if !a.notifyEnabled(notifyKindFail) {
 			return
 		}
 		body := t.FileName
@@ -96,7 +105,7 @@ func (a *App) notifyTaskFinished(t engine.Task) {
 	if t.Status != engine.StatusCompleted {
 		return
 	}
-	if !a.notifyEnabled("complete") {
+	if !a.notifyEnabled(notifyKindComplete) {
 		return
 	}
 	a.sendSysNotification("task-finished-"+t.ID, a.text("下载完成", "Download completed"), t.FileName)
