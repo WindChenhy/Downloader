@@ -15,7 +15,12 @@ func (a *App) watchClipboard() {
 	ticker := time.NewTicker(1500 * time.Millisecond)
 	defer ticker.Stop()
 	var last string
-	for range ticker.C {
+	for {
+		select {
+		case <-a.clipboardStop:
+			return // 应用退出：停止轮询，别在收尾阶段继续调 Wails 运行时
+		case <-ticker.C:
+		}
 		if a.mgr == nil {
 			continue
 		}

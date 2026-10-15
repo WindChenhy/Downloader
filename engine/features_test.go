@@ -169,11 +169,12 @@ func TestRateLimitSlowsDownload(t *testing.T) {
 	}
 
 	start := time.Now()
-	if _, err := m.AddTask(srv.URL, saveDir, 2, ""); err != nil {
+	first, err := m.AddTask(srv.URL, saveDir, 2, "")
+	if err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		return m.GetTasks()[0].Status == StatusCompleted
+		return taskOf(t, m, first.ID).Status == StatusCompleted
 	}, 30*time.Second)
 	if elapsed := time.Since(start); elapsed < 2*time.Second {
 		t.Fatalf("限速 100KB/s 下载 300KB 只用了 %v，限速未生效", elapsed)
@@ -189,11 +190,15 @@ func TestRateLimitSlowsDownload(t *testing.T) {
 		t.Fatal(err)
 	}
 	start = time.Now()
-	if _, err := m.AddTask(srv.URL, saveDir, 2, ""); err != nil {
+	second, err := m.AddTask(srv.URL, saveDir, 2, "")
+	if err != nil {
 		t.Fatal(err)
 	}
+	// 必须盯住「第二个任务」本身：GetTasks()[0] 是此刻已完成的第一条记录，
+	// 等它会在瞬间返回——断言 elapsed 形同虚设，而且后台那个下载会和
+	// t.TempDir() 的清理抢目录（Windows 上报「目录非空」而随机失败）。
 	waitFor(t, func() bool {
-		return m.GetTasks()[0].Status == StatusCompleted
+		return taskOf(t, m, second.ID).Status == StatusCompleted
 	}, 10*time.Second)
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Fatalf("不限速下载 300KB 用了 %v，异常缓慢", elapsed)

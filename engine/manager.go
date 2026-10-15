@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 )
 
 // taskHandle 一个任务的运行期状态（Task 本体 + 当前运行的控制柄）。
@@ -86,6 +87,10 @@ type Manager struct {
 	freeSpace func(path string) (int64, error)
 	// spaceCache 按卷缓存的剩余空间采样（key = volumeKey），mu 保护
 	spaceCache map[string]*spaceStat
+	// volCache 目录 → 卷标识的缓存，mu 保护。volumeKey 要沿路径逐级
+	// os.Stat 上溯，而 progressLoop 每 500ms 会对每个排队任务调一次；
+	// 不缓存就是每秒上百次持锁 syscall，慢盘上直接拖住进度循环
+	volCache map[string]string
 	// stats 下载统计与速度曲线采样，mu 保护（见 stats.go）
 	stats *statsCollector
 	// queueNoteDirty 队列层面的说明变了（任务被空间不足拦下 / 拦不住了自己放行），
@@ -159,6 +164,7 @@ func NewManager(dataDir string, notify func(Event), opts ...Option) (*Manager, e
 		loopDone:    make(chan struct{}),
 		freeSpace:   freeSpaceOnPath,
 		spaceCache:  make(map[string]*spaceStat),
+		volCache:    make(map[string]string),
 		stats:       newStatsCollector(store.StatsPath()),
 	}
 	for _, opt := range opts {
@@ -220,6 +226,9 @@ type AddTaskParams struct {
 	// Cookie / Referer 每任务的认证与防盗链头；空 = 沿用全局自定义请求头
 	Cookie  string `json:"cookie"`
 	Referer string `json:"referer"`
+	// PauseImmediately 建好后直接置为暂停、不进调度。仅内部使用（导入暂停态
+	// 任务时避免"先跑起来再取消"），不对外暴露：REST API 请求体设不了它
+	PauseImmediately bool `json:"-"`
 }
 
 // BatchAddResult 批量新建结果：成功任务列表 + 失败说明（与输入顺序对应可不保证）。
@@ -249,6 +258,7 @@ func (m *Manager) AddTaskWithChecksum(p AddTaskParams) (Task, error) {
 	t, err := m.addTaskLocked(u, p)
 	var snap []Task
 	if err == nil {
+		m.persistTasksLocked()
 		snap = m.snapshotLocked()
 	}
 	m.mu.Unlock()
@@ -262,23 +272,46 @@ func (m *Manager) AddTaskWithChecksum(p AddTaskParams) (Task, error) {
 }
 
 // AddTasks 批量新建；逐条校验，失败不影响已成功项。
+// 与循环调用 AddTaskWithChecksum 的区别只有一处：一次加锁、一次写 tasks.json、
+// 一次推列表快照（单任务事件仍逐条发，通知按条走）。导入上百条时逐条调用
+// 就是上百次全量写盘 + 上百次列表事件，与 queueops.go 里批量操作的骨架一致。
 func (m *Manager) AddTasks(items []AddTaskParams) BatchAddResult {
 	var out BatchAddResult
+	m.mu.Lock()
 	for i, p := range items {
-		t, err := m.AddTaskWithChecksum(p)
+		u, err := validateURL(p.URL)
+		if err != nil {
+			out.Errors = append(out.Errors, fmt.Sprintf("第 %d 条（%s）: %v", i+1, truncateURL(p.URL), err))
+			continue
+		}
+		t, err := m.addTaskLocked(u, p)
 		if err != nil {
 			out.Errors = append(out.Errors, fmt.Sprintf("第 %d 条（%s）: %v", i+1, truncateURL(p.URL), err))
 			continue
 		}
 		out.Tasks = append(out.Tasks, t)
 	}
+	if len(out.Tasks) == 0 {
+		m.mu.Unlock()
+		return out // 一条都没建成：不落盘也不推送
+	}
+	m.persistTasksLocked()
+	snap := m.snapshotLocked()
+	m.mu.Unlock()
+	m.emitTasks(snap)
+	// 单条事件逐发：通知按任务走，合成一条会丢信息
+	for _, t := range out.Tasks {
+		m.emitTask(EventTaskCreated, t)
+	}
 	return out
 }
 
 func truncateURL(s string) string {
 	s = strings.TrimSpace(s)
-	if len(s) > 48 {
-		return s[:45] + "..."
+	// 按字符截断：链接里常带中文，按字节切会留下半个 UTF-8 字符，
+	// 拼进错误提示后直接变成乱码
+	if utf8.RuneCountInString(s) > 48 {
+		return string([]rune(s)[:45]) + "..."
 	}
 	if s == "" {
 		return "(空)"
@@ -286,6 +319,9 @@ func truncateURL(s string) string {
 	return s
 }
 
+// addTaskLocked 按完整参数新建任务并调度。调用方须持有 mu，
+// 并自行决定何时 persistTasksLocked —— 批量新建据此做到
+// 「一次加锁、一次落盘、一次推送」（见 AddTasks）。
 func (m *Manager) addTaskLocked(u *url.URL, p AddTaskParams) (Task, error) {
 	rawURL := p.URL
 	saveDir := p.SaveDir
@@ -294,15 +330,15 @@ func (m *Manager) addTaskLocked(u *url.URL, p AddTaskParams) (Task, error) {
 	if strings.TrimSpace(saveDir) == "" {
 		saveDir = m.settings.SaveDir
 	}
-	// 目录分类若指向子目录则先确保存在（创建失败时仍尝试下载，由后续写入报错）
-	if abs, err := filepath.Abs(saveDir); err == nil {
-		_ = os.MkdirAll(abs, 0o755)
-		saveDir = abs
-	}
 	abs, err := filepath.Abs(saveDir)
 	if err != nil {
 		return Task{}, err
 	}
+	// 目录分类若指向子目录则先确保存在（创建失败时仍尝试下载，由后续写入报错）。
+	// MkdirAll 是磁盘 syscall，本该放到锁外，但保存目录依赖 m.settings.SaveDir，
+	// 挪出去要把新建拆成两段加锁；新建任务是低频用户操作，留在锁内代价可忽略。
+	_ = os.MkdirAll(abs, 0o755)
+	saveDir = abs
 	if connections <= 0 {
 		connections = m.settings.Connections
 	}
@@ -351,11 +387,15 @@ func (m *Manager) addTaskLocked(u *url.URL, p AddTaskParams) (Task, error) {
 		Cookie:           strings.TrimSpace(p.Cookie),
 		Referer:          strings.TrimSpace(p.Referer),
 	}
+	// 导入暂停态任务时直接建成暂停：否则任务会先被 dispatch 拉起来跑一段，
+	// 再被 PauseTask 取消，白耗带宽，还得等本轮运行退出才知道真的停了
+	if p.PauseImmediately {
+		t.Status = StatusPaused
+	}
 	m.handles[t.ID] = &taskHandle{task: t, done: make(chan struct{})}
 	m.order = append(m.order, t.ID)
 	m.queueIdleFired = false
 	m.dispatchLocked()
-	m.persistTasksLocked()
 	return t, nil
 }
 
@@ -583,8 +623,12 @@ func (m *Manager) dropLocked(id string) bool {
 // 暂存目录已空时一并移除。正式文件不在这里删（由 deleteFiles 决定）。
 // 单任务删除与批量清理已完成共用这条路径，避免两者行为不一致。
 func (m *Manager) cleanupTaskFiles(t Task) {
-	_ = os.Remove(m.stagingPath(t.ID))
-	_ = os.Remove(m.store.StatePath(t.ID))
+	// 清理失败要留下痕迹：否则暂存区悄悄堆满孤儿 .part，用户和日志都无从察觉
+	for _, p := range []string{m.stagingPath(t.ID), m.store.StatePath(t.ID)} {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			fmt.Fprintln(os.Stderr, "清理任务残留失败:", p, err)
+		}
+	}
 	_ = os.Remove(m.stagingDir()) // 暂存目录已空则一并移除
 }
 
@@ -607,7 +651,15 @@ func (m *Manager) GetSettings() Settings {
 // 对下一轮任务生效：连接数、每任务限速（运行中的任务沿用其开始时的快照）。
 func (m *Manager) SaveSettings(s Settings) error {
 	s.normalize()
+	// 整段读写一律持锁。拆成两段（锁内补令牌 → 锁外写盘 → 锁内回写）的话：
+	//   1. 两次并发 SaveSettings 会各自补出一个令牌，落盘与内存各留一份，
+	//      设置页显示的令牌和服务端校验用的令牌对不上，API 全部 401；
+	//   2. 中间窗口里插入的 SetQueueSuspended / SetQueueWindow 会被
+	//      m.settings = s 整块覆盖掉，闸门与时间窗状态丢失。
+	// 代价是 settings.json 的写入期间进度循环要等一下（通常 <1ms），
+	// 与 persistTasksLocked 持锁写 tasks.json 的既有做法一致。
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	// 客户端未回传令牌时保留现有值：令牌由应用生成管理，不随表单清空
 	if strings.TrimSpace(s.APIToken) == "" {
 		s.APIToken = m.settings.APIToken
@@ -616,15 +668,17 @@ func (m *Manager) SaveSettings(s Settings) error {
 	if s.APIEnabled && strings.TrimSpace(s.APIToken) == "" {
 		s.APIToken = newID()
 	}
-	m.mu.Unlock()
 	if err := m.store.SaveSettings(s); err != nil {
 		return err
 	}
-	m.mu.Lock()
 	m.settings = s
-	m.client = buildHTTPClient(s) // 代理/UA 等即时生效
+	// 代理/UA 等即时生效。替换前先回收旧客户端的连接池：每次保存设置都
+	// 新建一个 Transport，旧的那份要等 IdleConnTimeout（90s）才自然释放
+	if tr, ok := m.client.Transport.(*http.Transport); ok {
+		tr.CloseIdleConnections()
+	}
+	m.client = buildHTTPClient(s)
 	m.limiter.SetLimit(s.SpeedLimit)
-	m.mu.Unlock()
 	return nil
 }
 
@@ -633,6 +687,15 @@ func (m *Manager) httpClient() *http.Client {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.client
+}
+
+// globalLimiter 返回当前的全局限速器（保存设置只原地改限额，不换对象）。
+// 须加锁读取：限速器与 httpClient 一样属于 mu 保护字段，任务 goroutine
+// 直接读 m.limiter 会在限速器改为重建式实现时立刻变成数据竞争。
+func (m *Manager) globalLimiter() *rateLimiter {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.limiter
 }
 
 // HasTaskWithURL 报告是否已存在相同 URL 的任务（剪贴板去重用）。
@@ -682,10 +745,8 @@ func (m *Manager) dispatchLocked() {
 		h := m.handles[nextID]
 		h.task.Status = StatusRunning
 		h.task.Error = ""
-		if h.task.BlockReason != "" {
-			h.task.BlockReason = ""
-			m.queueNoteDirty = true
-		}
+		// 这里不必再清 BlockReason：上面的候选循环只挑 BlockReason 为空的
+		// 任务，清除动作统一由 refreshSpaceBlockLocked 负责
 		// 基准先取任务已记录的进度：probe 期间界面不闪回 0，
 		// runner 探测完成后会用续传状态里的精确值覆盖
 		h.base = h.task.Downloaded
@@ -755,7 +816,15 @@ func (m *Manager) refreshSpaceBlockLocked(now time.Time) {
 // finishTask 收尾一轮运行：更新状态、持久化、通知、调度下一个任务。
 func (m *Manager) finishTask(h *taskHandle, err error) {
 	m.mu.Lock()
-	m.running--
+	m.running-- // 无论任务是否还在，本轮占用的并发额度都要归还
+	// 任务可能已在本轮运行期间被删除（RemoveTask 等待超时后会先摘记录再返回）。
+	// 这时本轮结果整体作废，不能再落盘/上报/推事件：否则 stats 会为已删除的
+	// 任务重建条目（tasks.json 里已无此任务，stats.json 里却永远留着），
+	// 界面也会收到一条点不开的完成/失败通知。
+	if cur, ok := m.handles[h.task.ID]; !ok || cur != h {
+		m.mu.Unlock()
+		return
+	}
 	h.cancel = nil
 	h.limiter = nil // 本轮限速器随运行结束作废
 	h.task.Speed = 0
@@ -918,14 +987,20 @@ func (m *Manager) cleanupOrphanStagingLocked() {
 	_ = os.Remove(m.stagingDir()) // 已空则移除
 }
 
+// snapshotLocked 任务列表快照（只读，不推进速度采样点）。调用方须持有 mu。
 func (m *Manager) snapshotLocked() []Task {
+	return m.snapshotWithLocked(m.now(), false)
+}
+
+// snapshotWithLocked 组装任务快照。settleSpeed 为 true 时同时结算瞬时速度
+// 并推进采样点，仅进度循环可用（普通快照推进了会导致读到的速度恒为 0）。
+// 调用方须持有 mu。
+func (m *Manager) snapshotWithLocked(now time.Time, settleSpeed bool) []Task {
 	out := make([]Task, 0, len(m.order))
-	now := m.now()
 	for _, id := range m.order {
 		h := m.handles[id]
 		if h.task.Status == StatusRunning {
-			// 快照只读，不推进速度采样点（由 progressLoop 结算瞬时速度）
-			out = append(out, h.runningView(now, false))
+			out = append(out, h.runningView(now, settleSpeed))
 			continue
 		}
 		out = append(out, h.task)
@@ -964,16 +1039,7 @@ func (m *Manager) progressLoop() {
 		}
 		m.queueNoteDirty = false
 		now := m.now()
-		out := make([]Task, 0, len(m.order))
-		for _, id := range m.order {
-			h := m.handles[id]
-			if h.task.Status == StatusRunning {
-				// 结算瞬时速度并推进采样点
-				out = append(out, h.runningView(now, true))
-				continue
-			}
-			out = append(out, h.task)
-		}
+		out := m.snapshotWithLocked(now, true) // 结算瞬时速度并推进采样点
 		m.stats.sample(out, now)
 		statsData, _ := m.stats.payload(now, false) // 持锁组装，写盘在锁外
 		m.mu.Unlock()

@@ -112,7 +112,10 @@ type taskRunner struct {
 	statePath    string
 	partFile     *os.File
 	resuming     bool
-	taskLimiter  *rateLimiter // 每任务限速器（dispatchLocked 创建；0 = 不限）
+	// globalLimiter 本轮的全局限速器快照；运行开始时经 Manager.globalLimiter 取，
+	// 不直接读 m.limiter（该字段属 mu 保护）
+	globalLimiter *rateLimiter
+	taskLimiter   *rateLimiter // 每任务限速器（dispatchLocked 创建；0 = 不限）
 }
 
 // runClient 返回本轮使用的客户端：复用 Manager 的 Transport（连接池与代理设置
@@ -175,6 +178,9 @@ func (r *taskRunner) run(ctx context.Context) error {
 		r.extraHeaders["Referer"] = ref
 	}
 	r.client = r.runClient()
+	// 全局限速器也在运行开始时快照：保存设置只原地改限额不换对象，
+	// 但这属于 mu 保护字段，任务 goroutine 必须经访问器读取
+	r.globalLimiter = r.m.globalLimiter()
 	r.fetchURL = resolveFetchURL(r.settings, r.task.URL)
 	// taskLimiter 由 dispatchLocked 创建并挂在 handle 上（运行中可经
 	// SetTaskSpeedLimit 热更新），这里不再自建
@@ -373,6 +379,20 @@ func (r *taskRunner) tryLoadSidecar(p *ProbeResult) *Sidecar {
 	if p.LastModified != "" && sc.LastModified != "" && p.LastModified != sc.LastModified {
 		return nil
 	}
+	// 结构自洽性：状态文件可能来自旧版本或被外部改坏，不能只比对元数据。
+	// 分段模式还要求每段 End >= Start（大小未知时 End 为 -1）；不满足就丢弃重建，
+	// 否则 fetchRange 里 start > c.End 会立刻把该段判为完成，最终产出一个
+	// 缺段的「已完成」文件，而且不会有任何报错
+	if len(sc.Chunks) == 0 {
+		return nil
+	}
+	if !sc.Single {
+		for _, c := range sc.Chunks {
+			if c.End < c.Start {
+				return nil
+			}
+		}
+	}
 	return sc
 }
 
@@ -532,7 +552,7 @@ func (r *taskRunner) fetchRange(ctx context.Context, idx int, live *atomic.Int64
 		r.addChunkProgress(idx, n)
 		live.Add(n) // 每个写入块实时计入进度，而不是等整段完成
 	}}
-	n, err := io.Copy(w, &limitedReader{r: body, ctx: ctx, l: r.m.limiter, extra: r.taskLimiter})
+	n, err := io.Copy(w, &limitedReader{r: body, ctx: ctx, l: r.globalLimiter, extra: r.taskLimiter})
 	if err != nil {
 		if body.stalled.Load() {
 			return fmt.Errorf("连接空闲超过 %s，已断开等待重试", bodyIdleTimeout)
@@ -610,7 +630,7 @@ func (r *taskRunner) fetchStream(ctx context.Context, offset int64, live *atomic
 	body := newIdleWatch(resp.Body, rcancel)
 	defer body.Stop()
 	w := &offsetWriter{f: r.partFile, off: offset, onWrite: func(n int64) { live.Add(n) }}
-	n, err := io.Copy(w, &limitedReader{r: body, ctx: ctx, l: r.m.limiter, extra: r.taskLimiter})
+	n, err := io.Copy(w, &limitedReader{r: body, ctx: ctx, l: r.globalLimiter, extra: r.taskLimiter})
 	if err != nil {
 		if body.stalled.Load() {
 			return fmt.Errorf("连接空闲超过 %s，已断开等待重试", bodyIdleTimeout)
@@ -676,6 +696,13 @@ func moveFile(src, dst string) error {
 	if err := os.Rename(src, dst); err == nil {
 		return nil
 	}
+	return copyAndRemove(src, dst)
+}
+
+// copyAndRemove 把 src 复制到 dst 再删除 src（moveFile 的跨盘回退路径）。
+// 单独成函数是为了让这条路径可被直接测试：只有在真的跨卷时才会走到，
+// 而这里正是出过问题的地方。
+func copyAndRemove(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -699,7 +726,14 @@ func moveFile(src, dst string) error {
 		_ = os.Remove(dst)
 		return err
 	}
-	if st, err := in.Stat(); err == nil {
+	// 删源之前必须先关掉它的句柄：Windows 上 os.Open 的共享模式不含
+	// FILE_SHARE_DELETE，句柄还开着时 os.Remove 必定报 sharing violation，
+	// 结果是文件其实已经复制完成、任务却被判成失败。
+	if err := in.Close(); err != nil {
+		return err
+	}
+	// 句柄已关，改用 os.Stat 取源大小（os.File.Stat 需要有效句柄）
+	if st, err := os.Stat(src); err == nil {
 		dstSt, err := os.Stat(dst)
 		if err != nil || dstSt.Size() != st.Size() {
 			_ = os.Remove(dst)

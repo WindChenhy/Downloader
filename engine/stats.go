@@ -309,10 +309,10 @@ func (c *statsCollector) recordFinish(t Task, status Status, now time.Time) {
 
 // drop 任务记录被删除时，统计侧的同名条目与差值基准一起清掉，避免无界增长。
 func (c *statsCollector) drop(id string) {
-	if _, ok := c.tasks[id]; !ok {
-		if _, ok := c.lastBytes[id]; !ok {
-			return
-		}
+	_, hadStat := c.tasks[id]
+	_, hadBase := c.lastBytes[id]
+	if !hadStat && !hadBase {
+		return // 本来就没有，不必置 dirty 触发一次无谓的写盘
 	}
 	delete(c.tasks, id)
 	delete(c.lastBytes, id)
@@ -343,7 +343,11 @@ func (c *statsCollector) prune(now time.Time) {
 	if len(c.tasks) <= statsSummaryKeep {
 		return
 	}
-	// 任务汇总被裁掉时，内存里的曲线与差值基准一起走（否则曲线无界增长）
+	// 只裁汇总与曲线（它们才是占空间的部分）。
+	// lastBytes 绝不能在这里删：它是 sample 求字节增量的基准，而这里被裁掉的
+	// 任务在 Manager 里仍然存活。基准一旦清成 0，下一拍 delta 就等于整个已
+	// 下载量，当日统计会一次性暴涨几个 G。基准只随任务记录真正被删除而清理
+	// （见 drop），被 tasks.json 保留着的任务必须一直有基准。
 	keep := map[string]bool{}
 	for _, ts := range c.sortedTasks(statsSummaryKeep) {
 		keep[ts.TaskID] = true
@@ -351,7 +355,7 @@ func (c *statsCollector) prune(now time.Time) {
 	for id := range c.tasks {
 		if !keep[id] {
 			delete(c.tasks, id)
-			delete(c.lastBytes, id)
+			c.dirty = true
 		}
 	}
 }

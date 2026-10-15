@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -61,6 +63,16 @@ func newBackend(t *testing.T) *engine.Manager {
 		t.Fatal(err)
 	}
 	t.Cleanup(m.Stop) // 停掉后台循环，别和 TempDir 清理抢目录
+	// 默认保存目录必须落到临时目录：用例里大多沿用 settings.saveDir 建任务，
+	// 不收敛的话下载会真的写进用户主目录的 Downloads（实测留下过
+	// download、download (1)…(15) 一串 10KB 垃圾文件，测试不该污染用户机器）。
+	// 白名单默认只含默认下载目录，这里一并收敛。
+	st := m.GetSettings()
+	st.SaveDir = t.TempDir()
+	st.AllowSaveDirs = nil
+	if err := m.SaveSettings(st); err != nil {
+		t.Fatal(err)
+	}
 	return m
 }
 
@@ -554,6 +566,13 @@ func TestQueueWindowAndStatsEndpoints(t *testing.T) {
 		tasks := apiTasks(t, api.URL, token)
 		return len(tasks) == 1 && tasks[0].Status != engine.StatusQueued
 	}, 15*time.Second)
+
+	// 再等它落到终态才结束用例：这一条原本只等到「离开 queued」就返回，
+	// 此时下载仍在跑，收尾会与 t.TempDir() 清理抢目录而随机失败
+	waitFor(t, func() bool {
+		tasks := apiTasks(t, api.URL, token)
+		return len(tasks) == 1 && tasks[0].Status == engine.StatusFailed
+	}, 15*time.Second)
 }
 
 // TestTaskStatsEndpoint 单任务曲线端点：运行中任务 200，无统计记录 404。
@@ -616,4 +635,189 @@ func TestTaskStatsEndpoint(t *testing.T) {
 		tasks := apiTasks(t, api.URL, token)
 		return len(tasks) == 1 && tasks[0].Status == engine.StatusCompleted
 	}, 15*time.Second)
+}
+
+// TestReadSettingsEndpoint GET /api/v1/settings 可直接读取设置。
+// 此前只经 PUT 的响应体间接覆盖，GET 路径本身没有用例。
+func TestReadSettingsEndpoint(t *testing.T) {
+	m := newBackend(t)
+	want := m.GetSettings()
+	api := httptest.NewServer(New(m).Handler())
+	defer api.Close()
+
+	resp := apiDo(t, http.MethodGet, api.URL+"/api/v1/settings", want.APIToken, "", "")
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		t.Fatalf("读取设置状态码 = %d", resp.StatusCode)
+	}
+	defer resp.Body.Close()
+	var got engine.Settings
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.SaveDir != want.SaveDir || got.APIPort != want.APIPort || got.ConcurrentTasks != want.ConcurrentTasks {
+		t.Fatalf("设置读数与引擎不一致:\n got %+v\nwant %+v", got, want)
+	}
+}
+
+// TestRetryFailedEndpoint POST /api/v1/queue/retry-failed 只重试失败任务并返回条数。
+func TestRetryFailedEndpoint(t *testing.T) {
+	m := newBackend(t)
+	st := m.GetSettings()
+	st.APIEnabled = false // 测试不真正监听端口
+	if err := m.SaveSettings(st); err != nil {
+		t.Fatal(err)
+	}
+	token := m.GetSettings().APIToken
+	api := httptest.NewServer(New(m).Handler())
+	defer api.Close()
+
+	// 不可达地址：任务探测即失败，很快落到 failed
+	body := fmt.Sprintf(`{"url":"http://127.0.0.1:1/x.zip","saveDir":%q}`, m.GetSettings().SaveDir)
+	resp := apiDo(t, http.MethodPost, api.URL+"/api/v1/tasks", token, "application/json", body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("新建任务状态码 = %d", resp.StatusCode)
+	}
+	waitFor(t, func() bool {
+		tasks := apiTasks(t, api.URL, token)
+		return len(tasks) == 1 && tasks[0].Status == engine.StatusFailed
+	}, 15*time.Second)
+
+	resp = apiDo(t, http.MethodPost, api.URL+"/api/v1/queue/retry-failed", token, "", "")
+	var counted map[string]int
+	if err := json.NewDecoder(resp.Body).Decode(&counted); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if counted["count"] != 1 {
+		t.Fatalf("retry-failed count = %v, want 1", counted)
+	}
+	// 重试后任务会重新入队并再次快速失败（地址不可达）。等它回到终态再结束用例：
+	// 任务还在跑时退出，它的收尾/落盘会和 t.TempDir() 清理撞车，
+	// Windows 上随机报「目录非空」或 rename tasks.json 失败。
+	waitFor(t, func() bool {
+		tasks := apiTasks(t, api.URL, token)
+		return len(tasks) == 1 && tasks[0].Status == engine.StatusFailed
+	}, 15*time.Second)
+}
+
+// TestDeleteWithFilesRemovesDownloadedFile 连文件删除的成功路径：
+// 任务先把文件真的下到（临时）保存目录，随后 ?files=1 要在记录与磁盘上同时移除它。
+// 已有的 TestSaveDirWhitelist 只覆盖了「白名单外 → 403」的拒绝分支。
+func TestDeleteWithFilesRemovesDownloadedFile(t *testing.T) {
+	rs := &rangeServer{content: make([]byte, 4000)}
+	srv := httptest.NewServer(rs)
+	defer srv.Close()
+
+	m := newBackend(t)
+	saveDir := m.GetSettings().SaveDir
+	st := m.GetSettings()
+	st.APIEnabled = false
+	if err := m.SaveSettings(st); err != nil {
+		t.Fatal(err)
+	}
+	token := m.GetSettings().APIToken
+	api := httptest.NewServer(New(m).Handler())
+	defer api.Close()
+
+	body := fmt.Sprintf(`{"url":%q,"saveDir":%q,"connections":2,"fileName":"gone.bin"}`, srv.URL, saveDir)
+	resp := apiDo(t, http.MethodPost, api.URL+"/api/v1/tasks", token, "application/json", body)
+	var task engine.Task
+	if err := json.NewDecoder(resp.Body).Decode(&task); err != nil {
+		resp.Body.Close()
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("新建任务状态码 = %d", resp.StatusCode)
+	}
+	waitFor(t, func() bool {
+		tasks := apiTasks(t, api.URL, token)
+		return len(tasks) == 1 && tasks[0].Status == engine.StatusCompleted
+	}, 20*time.Second)
+
+	file := filepath.Join(saveDir, "gone.bin")
+	if _, err := os.Stat(file); err != nil {
+		t.Fatalf("下载完成后文件应存在: %v", err)
+	}
+
+	resp = apiDo(t, http.MethodDelete, api.URL+"/api/v1/tasks/"+task.ID+"?files=1", token, "", "")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("连文件删除状态码 = %d", resp.StatusCode)
+	}
+	if _, err := os.Stat(file); err == nil {
+		t.Fatalf("连文件删除后磁盘上不应再有该文件: %s", file)
+	}
+	if n := len(apiTasks(t, api.URL, token)); n != 0 {
+		t.Fatalf("连文件删除后任务记录应已移除, 剩 %d", n)
+	}
+}
+
+// TestBearerTokenAndLoopbackHostVariants 令牌的第二种携带方式与 Host/Origin 的放行分支。
+// TestGuard 只覆盖了各种拒绝分支，这里补齐「合法即通过」的那一半。
+func TestBearerTokenAndLoopbackHostVariants(t *testing.T) {
+	m := newBackend(t)
+	token := m.GetSettings().APIToken
+	h := New(m).Handler()
+
+	do := func(host, origin, bearer string) *http.Response {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
+		req.Host = host
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr.Result()
+	}
+
+	// Authorization: Bearer 与 X-API-Token 等价
+	if resp := do("127.0.0.1:8199", "", token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("Bearer 令牌应 200, got %d", resp.StatusCode)
+	}
+	if resp := do("127.0.0.1:8199", "", "wrong"); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("错误 Bearer 令牌应 401, got %d", resp.StatusCode)
+	}
+	// Host 白名单里的另外两种写法
+	if resp := do("localhost:8199", "", token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("localhost Host 应 200, got %d", resp.StatusCode)
+	}
+	if resp := do("[::1]:8199", "", token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("[::1] Host 应 200, got %d", resp.StatusCode)
+	}
+	// Origin 为回环地址（前端 dev server 形态）应放行
+	if resp := do("127.0.0.1:8199", "http://localhost:5173", token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("回环 Origin 应 200, got %d", resp.StatusCode)
+	}
+}
+
+// TestInvalidJSONBodyRejected 带体但内容不是合法 JSON（Content-Type 已正确）→ 400，
+// 而不是 500 或静默建出一个空任务。
+func TestInvalidJSONBodyRejected(t *testing.T) {
+	m := newBackend(t)
+	token := m.GetSettings().APIToken
+	api := httptest.NewServer(New(m).Handler())
+	defer api.Close()
+
+	for _, c := range []struct{ method, path string }{
+		{http.MethodPost, "/api/v1/tasks"},
+		{http.MethodPut, "/api/v1/queue/suspended"},
+		{http.MethodPut, "/api/v1/settings"},
+	} {
+		resp := apiDo(t, c.method, api.URL+c.path, token, "application/json", "{ not json")
+		code := resp.StatusCode
+		resp.Body.Close()
+		if code != http.StatusBadRequest {
+			t.Fatalf("%s %s 非法 JSON 应 400, got %d", c.method, c.path, code)
+		}
+	}
+	if n := len(apiTasks(t, api.URL, token)); n != 0 {
+		t.Fatalf("非法请求体不应建出任务, 现有 %d 条", n)
+	}
 }

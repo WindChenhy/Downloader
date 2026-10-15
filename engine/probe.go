@@ -202,11 +202,13 @@ func decodeRFC5987(v string) string {
 func fileNameFromURL(u *url.URL) string {
 	name := ""
 	if u != nil && u.Path != "" {
-		decoded, err := url.PathUnescape(u.Path)
-		if err == nil {
-			u.Path = decoded
+		// 解码只用于取名，不写回 u.Path：调用方还要用原始路径发请求，
+		// 就地改写会让同一份 URL 在别处读到已被解码的路径
+		path := u.Path
+		if decoded, err := url.PathUnescape(path); err == nil {
+			path = decoded
 		}
-		segments := strings.Split(strings.Trim(u.Path, "/"), "/")
+		segments := strings.Split(strings.Trim(path, "/"), "/")
 		if len(segments) > 0 {
 			name = segments[len(segments)-1]
 		}
@@ -260,8 +262,10 @@ func sanitizeFileName(name string) string {
 			}
 		}
 	}
-	if len(name) > 150 {
-		name = name[:150]
+	// 按字符而不是字节截断：文件名常含中文，按字节切会留下半个 UTF-8 字符，
+	// 序列化到前端后变成乱码（且可能真在磁盘上建出名字损坏的文件）
+	if n := utf8.RuneCountInString(name); n > 150 {
+		name = string([]rune(name)[:150])
 	}
 	return name
 }

@@ -179,7 +179,9 @@ func TestStatsDropWithTaskRecord(t *testing.T) {
 // TestStatsSurviveRestartAndDoNotDoubleCount 按天聚合跨重启保留，
 // 且重启后首次采样不会把上次下好的字节再算一遍。
 // 文件故意要下载几秒（每任务限速），否则整个任务在两个采样点之间就结束了，
-// 曲线本来就没东西可画。
+// 曲线本来就没东西可画。限速按 8KB/s 给：60KB 约 7.5s，跨 3 个 2s 采样窗口；
+// 限速器按实际读取量计费后速率是准的（早先会多扣配额把速度压低），
+// 留足余量才不会卡在「只采到一个点」的边界上。
 func TestStatsSurviveRestartAndDoNotDoubleCount(t *testing.T) {
 	content := newContent(t, 60000)
 	srv := httptest.NewServer(&testServer{content: content, etag: `"st"`})
@@ -193,7 +195,7 @@ func TestStatsSurviveRestartAndDoNotDoubleCount(t *testing.T) {
 	stopOnCleanup(t, m)
 	saveDir := t.TempDir()
 	task, err := m.AddTaskWithChecksum(AddTaskParams{
-		URL: srv.URL, SaveDir: saveDir, Connections: 2, SpeedLimit: 20000,
+		URL: srv.URL, SaveDir: saveDir, Connections: 2, SpeedLimit: 8000,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -280,5 +282,87 @@ func TestStatsTotalAndWeekWindow(t *testing.T) {
 	}
 	if len(s.Daily) != 3 || s.Daily[0].Date > s.Daily[2].Date {
 		t.Fatalf("按天列表应升序: %+v", s.Daily)
+	}
+}
+
+// TestStatsPruneKeepsByteBaseline 汇总被裁掉时不能连差值基准一起删。
+//
+// prune 只负责控制汇总条数与曲线体积；lastBytes 是 sample 求字节增量的基准，
+// 被裁掉的任务在 Manager 里仍然活着。基准一旦清成 0，下一拍的 delta 就等于
+// 整个已下载量，当日下载统计会一次性暴涨几个 G（用户其实并没有多下这么多）。
+func TestStatsPruneKeepsByteBaseline(t *testing.T) {
+	c := newTestStats(t)
+	now := time.Now()
+
+	// 造出超过 statsSummaryKeep 个任务，都还在下载中
+	const total = statsSummaryKeep + 20
+	for i := 0; i < total; i++ {
+		id := fmt.Sprintf("t%03d", i)
+		// UpdatedAt 越小越旧，t000 起的前 20 个会被裁掉
+		c.tasks[id] = &TaskStat{TaskID: id, UpdatedAt: int64(i)}
+		c.lastBytes[id] = 1024
+	}
+
+	// 立一次采样基线（用最年轻的 t119：sample 会刷新它的 UpdatedAt，
+	// 若拿 t000 立基线会把它变成最新的那个，反而不会被裁掉）
+	c.sample([]Task{runningTask("t119", 1024, 0)}, now)
+	c.prune(now)
+
+	if len(c.tasks) != statsSummaryKeep {
+		t.Fatalf("裁完后汇总条数 = %d, want %d", len(c.tasks), statsSummaryKeep)
+	}
+	if _, ok := c.lastBytes["t000"]; !ok {
+		t.Fatal("基准被 prune 删掉了：下一拍会把整个已下载量当成新增字节")
+	}
+	if _, ok := c.lastBytes["t119"]; !ok {
+		t.Fatal("保留下来的任务基准不应被删")
+	}
+
+	// 继续下到 5000 字节：新增量应当是 5000-1024，而不是 5000
+	next := now.Add(3 * time.Second)
+	c.sample([]Task{runningTask("t000", 5000, 0)}, next)
+	if got := c.day(next).Bytes; got != 3976 {
+		t.Fatalf("当日新增字节 = %d, want 3976（等于 5000 说明基准被清成了 0）", got)
+	}
+}
+
+// TestManagerCloseStopsLoopAndFlushesStats Close = 停掉进度循环 + 强制落盘统计，
+// 应用退出（app.shutdown）正是靠它把最后一段采样写下去；且必须幂等。
+func TestManagerCloseStopsLoopAndFlushesStats(t *testing.T) {
+	dataDir := t.TempDir()
+	m, err := NewManager(dataDir, nopNotify)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 先停循环：否则后台 tick 可能抢先把统计写盘，让「Close 落盘」这一步无法证伪
+	m.Stop()
+
+	// 制造一份待落盘的数据（闭闸 + 不可达地址，不碰网络）
+	if err := m.SetQueueSuspended(true); err != nil {
+		t.Fatal(err)
+	}
+	task, err := m.AddTask("http://127.0.0.1:1/a.zip", t.TempDir(), 1, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.stats.recordFinish(task, StatusCompleted, m.now())
+
+	statsPath := m.store.StatsPath()
+	_ = os.Remove(statsPath)
+
+	if err := m.Close(); err != nil {
+		t.Fatalf("Close 返回错误: %v", err)
+	}
+	if _, err := os.Stat(statsPath); err != nil {
+		t.Fatalf("Close 应把统计落盘: %v", err)
+	}
+	select {
+	case <-m.loopDone:
+	default:
+		t.Fatal("Close 后进度循环应已退出")
+	}
+	// 幂等：重复调用不 panic、不报错
+	if err := m.Close(); err != nil {
+		t.Fatalf("Close 应幂等, got %v", err)
 	}
 }

@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"context"
+	"io"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -64,4 +66,48 @@ func handleLimiterLimit(m *Manager, id string) int64 {
 	lim.mu.Lock()
 	defer lim.mu.Unlock()
 	return lim.limit
+}
+
+// shortReader 每次最多返回 max 个字节，模拟 HTTP body 的短读。
+type shortReader struct {
+	max int
+}
+
+func (s *shortReader) Read(p []byte) (int, error) {
+	if s.max <= 0 {
+		return 0, io.EOF
+	}
+	n := len(p)
+	if n > s.max {
+		n = s.max
+	}
+	return n, nil
+}
+
+// TestLimitedReaderRefundsShortRead 覆盖短读计费：Wait 预扣整块配额后，
+// 若底层 Read 只返回少量字节，剩余配额必须退还，否则实际速率会被压成
+// 设定值的几分之一（限速是用户可感知的功能，压低了同样算缺陷）。
+func TestLimitedReaderRefundsShortRead(t *testing.T) {
+	l := newRateLimiter(1 << 20)
+	// 预置满额配额，让 Wait 立即通过，避免测试引入真实等待
+	l.mu.Lock()
+	l.credit = float64(readChunkSize)
+	l.last = time.Now()
+	l.mu.Unlock()
+
+	lr := &limitedReader{r: &shortReader{max: 100}, ctx: context.Background(), l: l}
+	buf := make([]byte, readChunkSize)
+	n, err := lr.Read(buf)
+	if err != nil || n != 100 {
+		t.Fatalf("Read = %d, %v; want 100, nil", n, err)
+	}
+
+	l.mu.Lock()
+	credit := l.credit
+	l.mu.Unlock()
+	// 只实际消费 100 字节：除时间累积带来的少量追加外，其余必须已退回。
+	// 时间累积恒为非负，故用下界判定即可，不依赖具体等待时长。
+	if credit < float64(readChunkSize-100) {
+		t.Fatalf("短读后未退还配额: credit = %.0f, want >= %d", credit, readChunkSize-100)
+	}
 }
