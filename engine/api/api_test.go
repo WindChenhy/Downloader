@@ -566,6 +566,13 @@ func TestQueueWindowAndStatsEndpoints(t *testing.T) {
 		tasks := apiTasks(t, api.URL, token)
 		return len(tasks) == 1 && tasks[0].Status != engine.StatusQueued
 	}, 15*time.Second)
+
+	// 再等它落到终态才结束用例：这一条原本只等到「离开 queued」就返回，
+	// 此时下载仍在跑，收尾会与 t.TempDir() 清理抢目录而随机失败
+	waitFor(t, func() bool {
+		tasks := apiTasks(t, api.URL, token)
+		return len(tasks) == 1 && tasks[0].Status == engine.StatusFailed
+	}, 15*time.Second)
 }
 
 // TestTaskStatsEndpoint 单任务曲线端点：运行中任务 200，无统计记录 404。
@@ -686,10 +693,13 @@ func TestRetryFailedEndpoint(t *testing.T) {
 	if counted["count"] != 1 {
 		t.Fatalf("retry-failed count = %v, want 1", counted)
 	}
-	// 重试后不能还是 failed（已重新入队）
-	if got := apiTasks(t, api.URL, token)[0].Status; got == engine.StatusFailed {
-		t.Fatalf("重试后状态应脱离 failed, got %s", got)
-	}
+	// 重试后任务会重新入队并再次快速失败（地址不可达）。等它回到终态再结束用例：
+	// 任务还在跑时退出，它的收尾/落盘会和 t.TempDir() 清理撞车，
+	// Windows 上随机报「目录非空」或 rename tasks.json 失败。
+	waitFor(t, func() bool {
+		tasks := apiTasks(t, api.URL, token)
+		return len(tasks) == 1 && tasks[0].Status == engine.StatusFailed
+	}, 15*time.Second)
 }
 
 // TestDeleteWithFilesRemovesDownloadedFile 连文件删除的成功路径：
