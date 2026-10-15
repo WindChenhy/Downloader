@@ -60,3 +60,39 @@ func mustManagerWithClient(t *testing.T, rt http.RoundTripper) (*Manager, string
 	stopOnCleanup(t, m)
 	return m, t.TempDir()
 }
+
+// TestWithStagingDirOption 覆盖暂存目录选项：应用层正是用它把分块数据挪到
+// 系统本地应用数据目录（%LOCALAPPDATA%\downloader\staging），使下载中的
+// .part 不出现在保存目录里。空白值应被忽略并保留默认 <数据目录>/staging。
+func TestWithStagingDirOption(t *testing.T) {
+	dataDir := t.TempDir()
+	stage := filepath.Join(t.TempDir(), "custom-staging")
+	m, err := NewManager(dataDir, nopNotify, WithStagingDir(stage))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopOnCleanup(t, m)
+
+	if got := m.stagingDir(); got != stage {
+		t.Fatalf("暂存目录 = %q, want %q", got, stage)
+	}
+	if got, want := m.stagingPath("abc"), filepath.Join(stage, "abc.part"); got != want {
+		t.Fatalf("暂存路径 = %q, want %q", got, want)
+	}
+	// 暂存目录只在需要时创建，且空目录会在启动收尾时被移除；
+	// 关键是路径必须落在注入的暂存根下，绝不能跑回保存目录
+	if !dirWithin(m.stagingPath("abc"), stage) {
+		t.Fatalf("暂存路径应位于注入的暂存目录内: %q", m.stagingPath("abc"))
+	}
+
+	// 空/空白值忽略 → 默认 <数据目录>/staging
+	defaultDir := t.TempDir()
+	m2, err := NewManager(defaultDir, nopNotify, WithStagingDir("   "))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopOnCleanup(t, m2)
+	if got, want := m2.stagingDir(), filepath.Join(defaultDir, "staging"); got != want {
+		t.Fatalf("空白值应忽略并回落默认目录: got %q want %q", got, want)
+	}
+}
