@@ -187,8 +187,13 @@ tasks:
         cd build/android
         # The exec bit is lost when gradlew is extracted from the embedded
         # build assets, so restore it before invoking the wrapper.
-        chmod +x ./gradlew
-        ./gradlew assembleDebug
+        chmod +x ./gradlew 2>/dev/null || true
+        # Windows 不能直接执行 sh 脚本，且内嵌 sh 不搜当前目录：
+        # 经 cmd /c 启动 gradlew.bat；POSIX 宿主直接跑 ./gradlew
+        case "$(uname -s)" in
+          MINGW*|MSYS*|CYGWIN*) cmd /c gradlew.bat assembleDebug ;;
+          *)                    ./gradlew assembleDebug ;;
+        esac
         cp app/build/outputs/apk/debug/app-debug.apk "../../{{.BIN_DIR}}/{{.APP_NAME}}.apk"
         echo "APK created: {{.BIN_DIR}}/{{.APP_NAME}}.apk"
 
@@ -202,8 +207,13 @@ tasks:
         cd build/android
         # The exec bit is lost when gradlew is extracted from the embedded
         # build assets, so restore it before invoking the wrapper.
-        chmod +x ./gradlew
-        ./gradlew assembleRelease
+        chmod +x ./gradlew 2>/dev/null || true
+        # Windows 不能直接执行 sh 脚本，且内嵌 sh 不搜当前目录：
+        # 经 cmd /c 启动 gradlew.bat；POSIX 宿主直接跑 ./gradlew
+        case "$(uname -s)" in
+          MINGW*|MSYS*|CYGWIN*) cmd /c gradlew.bat assembleRelease ;;
+          *)                    ./gradlew assembleRelease ;;
+        esac
         cp app/build/outputs/apk/release/app-release.apk "../../{{.BIN_DIR}}/{{.APP_NAME}}.apk"
         echo "Release APK created: {{.BIN_DIR}}/{{.APP_NAME}}.apk"
 
@@ -217,8 +227,13 @@ tasks:
         cd build/android
         # The exec bit is lost when gradlew is extracted from the embedded
         # build assets, so restore it before invoking the wrapper.
-        chmod +x ./gradlew
-        ./gradlew bundleDebug
+        chmod +x ./gradlew 2>/dev/null || true
+        # Windows 不能直接执行 sh 脚本，且内嵌 sh 不搜当前目录：
+        # 经 cmd /c 启动 gradlew.bat；POSIX 宿主直接跑 ./gradlew
+        case "$(uname -s)" in
+          MINGW*|MSYS*|CYGWIN*) cmd /c gradlew.bat bundleDebug ;;
+          *)                    ./gradlew bundleDebug ;;
+        esac
         cp app/build/outputs/bundle/debug/app-debug.aab "../../{{.BIN_DIR}}/{{.APP_NAME}}.aab"
         echo "AAB created: {{.BIN_DIR}}/{{.APP_NAME}}.aab"
 
@@ -241,8 +256,13 @@ tasks:
         cd build/android
         # The exec bit is lost when gradlew is extracted from the embedded
         # build assets, so restore it before invoking the wrapper.
-        chmod +x ./gradlew
-        ./gradlew bundleRelease
+        chmod +x ./gradlew 2>/dev/null || true
+        # Windows 不能直接执行 sh 脚本，且内嵌 sh 不搜当前目录：
+        # 经 cmd /c 启动 gradlew.bat；POSIX 宿主直接跑 ./gradlew
+        case "$(uname -s)" in
+          MINGW*|MSYS*|CYGWIN*) cmd /c gradlew.bat bundleRelease ;;
+          *)                    ./gradlew bundleRelease ;;
+        esac
         cp app/build/outputs/bundle/release/app-release.aab "../../{{.BIN_DIR}}/{{.APP_NAME}}.aab"
         echo "Release AAB created: {{.BIN_DIR}}/{{.APP_NAME}}.aab"
 

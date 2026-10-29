@@ -58,6 +58,11 @@ ARCH=amd64 wails3 task android:build # 模拟器架构
 
 构建链路：前端 vite 构建 → `wails3 android overlay:gen` 生成 Android 入口注册 → NDK 交叉编译为 `libwails.so`（c-shared，含 JNI 桥）→ gradle 打包 APK。
 
+**已内置的 Windows / 国内网络适配**（无需额外配置）：
+
+- Windows 宿主：`uname` 探测 MINGW/MSYS 自动改用 NDK 的 `windows-x86_64` 工具链；gradle 经 `cmd /c gradlew.bat` 启动（Windows 无法直接执行 sh 脚本）
+- gradle 发行版走腾讯镜像、maven 依赖走阿里云镜像（`services.gradle.org` / `dl.google.com` 直连超时时仍可构建）；`buildToolsVersion` 固定 35.0.0（与 compileSdk 35 配套，本机 SDK 无 34.x）
+
 ### Android 平台行为差异
 
 - **数据目录**：应用私有目录 `activity.getFilesDir()` 下的 `downloader/`（任务列表、设置、续传状态、下载暂存都在这里），卸载即清除。

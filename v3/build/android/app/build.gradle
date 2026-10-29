@@ -7,6 +7,8 @@ android {
     // （Java_com_wails_app_WailsBridge_*）硬编码了这个包名
     namespace 'com.wails.app'
     compileSdk 35
+    // AGP 8.7.3 默认要 34.0.0，本机 SDK 只有 35.x，显式固定
+    buildToolsVersion "35.0.0"
 
     buildFeatures {
         buildConfig = true
