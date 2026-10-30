@@ -118,8 +118,12 @@ type Settings struct {
 	// API/导入允许的保存目录白名单（默认下载目录始终允许）；
 	// 空 = 仅默认下载目录。用于阻断经接口向任意目录写/删文件
 	AllowSaveDirs []string      `json:"allowSaveDirs,omitempty"`
-	CloseAction   string        `json:"closeAction"`   // ask | exit | minimize
-	DirCategories []DirCategory `json:"dirCategories"` // 下载目录分类
+	CloseAction   string        `json:"closeAction"` // ask | exit | minimize
+	// MinimizeToTray 点击最小化按钮时隐藏到系统托盘而不是最小化到任务栏
+	//（仅桌面端生效，默认 false）。引擎只负责存取，行为由应用层实现。
+	// v2/v3 共享同一份 settings.json，两侧引擎字段必须同步，否则互相覆盖丢字段。
+	MinimizeToTray bool          `json:"minimizeToTray"`
+	DirCategories  []DirCategory `json:"dirCategories"` // 下载目录分类
 	AutoExtract   bool          `json:"autoExtract"`   // 下载完成后自动解压压缩包
 	// 系统通知：完成/失败默认开，创建/暂停默认关，均可配置
 	NotifyOnCreate   bool `json:"notifyOnCreate"`

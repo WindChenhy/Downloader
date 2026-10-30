@@ -185,6 +185,13 @@ export interface Settings {
     "closeAction": string;
 
     /**
+     * MinimizeToTray 点击最小化按钮时隐藏到系统托盘而不是最小化到任务栏
+     * （仅桌面端生效，默认 false）。引擎只负责存取，行为由应用层实现。
+     * v2/v3 共享同一份 settings.json，两侧引擎字段必须同步，否则互相覆盖丢字段。
+     */
+    "minimizeToTray": boolean;
+
+    /**
      * 下载目录分类
      */
     "dirCategories": DirCategory[] | null;

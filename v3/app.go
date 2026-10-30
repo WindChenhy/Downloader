@@ -37,6 +37,13 @@ type AppService struct {
 	// notifier 平台通知后端；registerNotifications 按平台装配
 	notifier notifier
 	tray     *application.SystemTray
+	// 托盘菜单的文案项引用：语言切换时原地 SetLabel，免重建菜单
+	trayMenu     *application.Menu
+	trayShowItem *application.MenuItem
+	trayQuitItem *application.MenuItem
+	// trayStatus 上次托盘提示文案缓存：进度节拍 500ms 一推，文案没变就不碰系统 API
+	trayStatus   string
+	trayStatusMu sync.Mutex
 	// quitting 主动退出标志：为 true 时窗口关闭拦截不再阻止退出，
 	// 否则托盘/弹窗选「退出」后 close 生命周期会再次进入询问逻辑，
 	// 把窗口关掉却拦下进程退出，任务管理器里留下幽灵进程。
@@ -82,6 +89,10 @@ func (s *AppService) ServiceStartup(ctx context.Context, options application.Ser
 				s.notifyTaskFinished(ev.Task)
 			case engine.EventQueueIdle:
 				s.onQueueIdle()
+			}
+			// 托盘实时提示跟随任务快照（500ms 节拍；内部按文案去重）
+			if ev.Name == engine.EventTasksChanged {
+				s.updateTrayStatus(ev.Tasks)
 			}
 		},
 		engine.WithStagingDir(filepath.Join(stageRoot, "staging")))
@@ -363,6 +374,8 @@ func (s *AppService) SaveSettings(st engine.Settings) error {
 		return err
 	}
 	s.syncNotifyFlags()
+	// 托盘菜单/提示跟随界面语言即时刷新（v2 需要重启才生效）
+	s.refreshTray()
 	go s.api.Sync() // 异步：避免与在途请求互相等待
 	return nil
 }
@@ -417,6 +430,20 @@ func (s *AppService) onWindowClosing(ev *application.WindowEvent) {
 		// ask：交给前端弹窗，先阻止关闭
 		s.app.Event.Emit("app:confirm-close")
 		ev.Cancel()
+	}
+}
+
+// onWindowMinimising 最小化拦截（仅桌面注册）：开启「最小化时隐藏到托盘」
+// 时把窗口藏起来——任务栏不再占位，从托盘图标唤回。WindowMinimise 事件在
+// 系统完成最小化之后发出、不可取消，这里紧跟 Hide 是 wails 明确支持的
+// 「最小化状态下隐藏」路径（其内部对隐藏态窗口有专门守卫，避免 WebView
+// 输入面残留）。这是 v2 做不到的能力：v2 没有最小化事件钩子。
+func (s *AppService) onWindowMinimising(ev *application.WindowEvent) {
+	if s.mgr == nil || s.window == nil {
+		return
+	}
+	if s.mgr.GetSettings().MinimizeToTray {
+		s.window.Hide()
 	}
 }
 

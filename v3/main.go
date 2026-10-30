@@ -74,6 +74,8 @@ func runApp() {
 		// 关闭行为由设置决定：每次询问 / 直接退出 / 最小化到托盘；
 		// Android 无窗口关闭按钮，不注册拦截
 		win.OnWindowEvent(events.Common.WindowClosing, svc.onWindowClosing)
+		// 「最小化时隐藏到托盘」：按设置生效，v2 没有的最小化钩子
+		win.OnWindowEvent(events.Common.WindowMinimise, svc.onWindowMinimising)
 	}
 
 	if err := app.Run(); err != nil {

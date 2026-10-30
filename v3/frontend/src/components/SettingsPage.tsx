@@ -65,6 +65,7 @@ export default function SettingsPage({
   const [form, setForm] = useState<Settings>({
     ...settings,
     closeAction: settings.closeAction ?? 'ask',
+    minimizeToTray: settings.minimizeToTray ?? false,
     dirCategories: settings.dirCategories ?? [],
     autoExtract: settings.autoExtract ?? false,
     afterComplete: settings.afterComplete ?? 'none',
@@ -541,6 +542,12 @@ export default function SettingsPage({
           ))}
         </div>
       </div>
+      <Switch
+        checked={form.minimizeToTray ?? false}
+        onChange={(v) => set({minimizeToTray: v})}
+        label={t('最小化时隐藏到托盘')}
+        hint={t('点击最小化按钮时隐藏到系统托盘，不占任务栏；从托盘图标唤回')}
+      />
 
       <h3>{t('集成')}</h3>
       <Switch

@@ -6,7 +6,7 @@ import {useSyncExternalStore} from 'react';
  * - 中文为键：zh-CN 无需字典；en-US 缺条目时优雅回落中文，便于增量补全。
  * - 插值仅替换传入参数名的 {key} 占位，文案中的 {url}、{1..10} 等字面量不受影响。
  * - 界面语言即时生效；解析后的具体语言会同步进引擎设置（language 字段），
- *   供系统通知与托盘菜单使用（托盘菜单在下次启动时应用）。
+ *   供系统通知与托盘菜单使用（v3 托盘菜单即时刷新，v2 需重启应用）。
  */
 
 export type LangPref = 'system' | 'zh-CN' | 'en-US';
@@ -282,6 +282,11 @@ const EN: Record<string, string> = {
   '记住我的选择，不再询问': "Remember my choice and don't ask again",
   '最小化到托盘': 'Minimize to tray',
   '直接退出': 'Exit',
+
+  // 设置页 · 窗口
+  '最小化时隐藏到托盘': 'Hide to tray on minimise',
+  '点击最小化按钮时隐藏到系统托盘，不占任务栏；从托盘图标唤回':
+    'Hiding on minimise keeps the window off the taskbar; restore it from the tray icon.',
 
   // 设置页
   '外观': 'Appearance',

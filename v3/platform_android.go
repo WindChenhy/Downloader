@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"downloader/engine"
+
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
@@ -53,3 +55,8 @@ func (s *AppService) quitTray() {}
 // 后台读剪贴板受系统限制（Android 10+ 仅前台应用可读），
 // 且常驻轮询耗电；粘贴由用户在新建对话框手动触发。
 func (s *AppService) startClipboardWatch() {}
+
+// updateTrayStatus / refreshTray Android 无系统托盘。
+func (s *AppService) updateTrayStatus(tasks []engine.Task) {}
+
+func (s *AppService) refreshTray() {}
