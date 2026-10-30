@@ -410,8 +410,10 @@ func (s *AppService) onSecondInstanceLaunch(data application.SecondInstanceData)
 	}
 }
 
-// onWindowClosing 点击窗口关闭按钮时的统一入口（仅桌面注册）。
-// 按设置决定：每次询问（默认）、直接退出、最小化到系统托盘。
+// onWindowClosing 点击窗口关闭按钮时的统一入口（以 RegisterHook 注册，仅桌面）。
+// 钩子同步先于 wails 内部的销毁监听器执行：按设置决定——每次询问（默认，
+// 交给前端弹窗）、直接退出、最小化到系统托盘；想拦下关闭必须在这里
+// ev.Cancel()，监听器模式里 Cancel 无法阻止内部销毁（见 main.go 注释）。
 func (s *AppService) onWindowClosing(ev *application.WindowEvent) {
 	// 已在主动退出流程中（托盘退出 / 弹窗选直接退出），放行
 	if s.quitting.Load() {
@@ -425,7 +427,7 @@ func (s *AppService) onWindowClosing(ev *application.WindowEvent) {
 		s.window.Hide()
 		ev.Cancel()
 	case engine.CloseActionExit:
-		// 放行，走正常关闭 → ServiceShutdown
+		// 放行 → 内部监听器销毁窗口，走正常关闭 → ServiceShutdown
 	default:
 		// ask：交给前端弹窗，先阻止关闭
 		s.app.Event.Emit("app:confirm-close")

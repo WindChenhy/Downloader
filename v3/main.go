@@ -72,8 +72,12 @@ func runApp() {
 	svc.setWindow(win)
 	if isDesktop() {
 		// 关闭行为由设置决定：每次询问 / 直接退出 / 最小化到托盘；
-		// Android 无窗口关闭按钮，不注册拦截
-		win.OnWindowEvent(events.Common.WindowClosing, svc.onWindowClosing)
+		// Android 无窗口关闭按钮，不注册拦截。
+		// 必须用 RegisterHook 而不是 OnWindowEvent：wails 内部把「真正销毁
+		// 窗口」也注册为 Common.WindowClosing 的监听器，且注册在前面、不检查
+		// Cancel；监听器是异步并发的， Cancel 拦不住它。钩子同步先跑，
+		// 钩子里 Cancel 会中止整个事件分发，才能真正拦下关闭。
+		win.RegisterHook(events.Common.WindowClosing, svc.onWindowClosing)
 		// 「最小化时隐藏到托盘」：按设置生效，v2 没有的最小化钩子
 		win.OnWindowEvent(events.Common.WindowMinimise, svc.onWindowMinimising)
 	}
