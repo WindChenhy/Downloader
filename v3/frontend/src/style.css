@@ -1232,3 +1232,137 @@ select,
   font-family: ui-monospace, Consolas, monospace;
   font-size: 12px;
 }
+
+/* ---------- 移动端适配（Android WebView / 窄窗口） ----------
+   桌面布局零改动；仅窄窗口下收紧密度、修掉文字竖断、
+   保证触控目标可用（≥40px）、筛选条横向滑动。 */
+@media (max-width: 640px) {
+  .content {
+    padding: 10px 12px 16px;
+    overscroll-behavior: contain;
+  }
+
+  /* 顶栏：收紧留白与品牌尺寸，图标触控目标保持 38px */
+  .titlebar {
+    padding: 7px 10px;
+  }
+  .brand {
+    gap: 8px;
+  }
+  .brand-mark {
+    width: 30px;
+    height: 30px;
+    font-size: 16px;
+    line-height: 30px;
+    border-radius: 7px;
+  }
+  .brand-name {
+    font-size: 14px;
+  }
+  .brand-sub {
+    font-size: 10px;
+  }
+  .titlebar-actions {
+    gap: 2px;
+  }
+  .titlebar-actions .btn.icon,
+  .titlebar-actions .btn.icon.primary {
+    width: 38px;
+    height: 38px;
+  }
+
+  /* 工具栏：筛选条横向滑动（不换行挤成两排），搜索独占一行 */
+  .toolbar {
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .filter-chips {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    margin: 0 -12px;
+    padding: 0 12px 2px;
+  }
+  .filter-chips::-webkit-scrollbar {
+    display: none;
+  }
+  .filter-chip {
+    flex: 0 0 auto;
+    padding: 5px 11px;
+  }
+  .search-input {
+    max-width: none;
+    width: 100%;
+    margin-left: 0;
+    order: 5;
+    padding: 8px 14px;
+  }
+  .queue-actions {
+    gap: 6px;
+  }
+  .queue-actions .btn {
+    padding: 7px 10px;
+    font-size: 12px;
+  }
+
+  /* 任务卡：紧凑排版；分段之间换行、段内禁止竖断 */
+  .task-row {
+    padding: 10px 12px;
+    gap: 10px;
+  }
+  .task-title {
+    gap: 6px;
+    margin-bottom: 3px;
+  }
+  .task-name {
+    font-size: 13px;
+  }
+  .chip {
+    font-size: 10px;
+    padding: 1px 7px;
+  }
+  .task-sub {
+    flex-wrap: wrap;
+    gap: 2px 10px;
+    font-size: 11px;
+    margin-bottom: 6px;
+  }
+  .task-sub > span {
+    white-space: nowrap;
+  }
+  .task-error {
+    max-width: 100%;
+    white-space: normal;
+  }
+  .task-actions {
+    gap: 4px;
+  }
+  .task-actions .btn.icon {
+    width: 36px;
+    height: 36px;
+  }
+  .progress {
+    height: 5px;
+  }
+
+  /* 弹窗与设置页：贴边留白收紧，两栏表单改单栏 */
+  .overlay {
+    padding: 10px;
+  }
+  .dialog,
+  .settings {
+    width: 100%;
+    max-width: calc(100vw - 20px);
+    padding: 16px;
+  }
+  .field-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* 触屏：去掉点按高亮残影 */
+  .task-row,
+  .btn,
+  .filter-chip {
+    -webkit-tap-highlight-color: transparent;
+  }
+}

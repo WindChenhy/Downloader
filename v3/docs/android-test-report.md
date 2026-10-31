@@ -53,7 +53,19 @@
 | I-2 | 桌面启动器图标为 Wails 模板默认「W」，未用应用品牌图标 | 用 `build/appicon.png` 生成各密度 mipmap 替换 |
 | I-3 | 模板构建日志有 `gcc_android.c: dlfcn.h` 报错（工具链探测噪音，不影响产物；本次 libwails.so 体积/哈希变化已确认新代码入包） | 上游关注；可忽略 |
 
-### 3.3 测试方法备注
+### 3.3 移动端 UI 排版优化（用户新增需求，本轮完成）
+
+真机走查发现桌面 CSS 直接套用在手机上的排版问题：任务元信息竖断（「8 连接」一字一行）、体积/耗时文案断行错乱、筛选条挤成两排、对话框贴边、两栏表单挤压。已在 `style.css` 追加 `@media (max-width: 640px)` 移动端适配层（桌面端零改动）：
+
+- 任务卡元信息：段间可换行、段内禁竖断（`white-space: nowrap`），文件名/徽标/大小/连接数/耗时均整齐成行
+- 筛选条改横向滑动条（隐藏滚动条），搜索框独占一行
+- 批量操作按钮紧凑化；任务卡内边距/图标/进度条按触控目标（≥36px）收紧
+- 弹窗与设置页贴边留白收紧，`field-grid` 两栏表单移动端改单栏
+- `overscroll-behavior: contain` 防误触滚动连锁
+
+优化前后对比：任务列表 [mobile-after-list.png](assets/mobile-after-list.png)、新建对话框 [mobile-after-dialog.png](assets/mobile-after-dialog.png)。
+
+### 3.4 测试方法备注
 
 - `screencap` 全黑为 MIUI 系统限制（与应用无关，桌面截图同样全黑）；`screenrecord + ffmpeg` 不受限，作为视觉证据通道。
 - `x86_64` 的 libwails.so 未随本轮重编（`android:package` 默认仅 arm64）；模拟器包请用 `ARCH=amd64` 或 `package:fat`。
