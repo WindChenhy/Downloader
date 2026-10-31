@@ -20,3 +20,4 @@ build/android/gen/
 
 # Task 运行时状态
 .task/
+docs/
