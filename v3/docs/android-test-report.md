@@ -65,7 +65,34 @@
 
 优化前后对比：任务列表 [mobile-after-list.png](assets/mobile-after-list.png)、新建对话框 [mobile-after-dialog.png](assets/mobile-after-dialog.png)。
 
-### 3.4 测试方法备注
+### 3.4 返回键/侧滑行为重做（用户新增需求，本轮完成）
+
+**原行为**：设置/统计/新建下载等界面按返回或侧滑 → Activity 直接结束、应用退出。
+
+**新行为**（已真机验证）：
+
+- `MainActivity` 拦截返回键/侧滑手势，经 `evaluateJavascript` 询问前端 `window.__wailsBack`
+- 前端维护「关闭栈」（`lib/backHandler.ts`）：新建下载弹窗、任务详情、删除确认、设置/统计视图各自注册关闭逻辑，栈顶优先消费
+- 消费（关掉了某层界面）→ 留在应用；未消费（已在首页）→ `moveTaskToBack` **退到后台保活下载**，不再结束应用
+- 行为验证：设置页 BACK → Activity 保持前台（消费）；首页 BACK → Launcher 在前台但**进程存活**；再启动原任务原样恢复；新建弹窗 BACK → 仅关弹窗
+
+### 3.5 数据竞态事故与修复（本轮发现）🔥
+
+真机测试中发生**用户设置被清空 + 任务列表被清空**（apiEnabled 变 false、tasks.json 变 `[]`）。根因链：
+
+1. Android 上 WebView 就绪早于 `ServiceStartup`，前端首帧 `getSettings` 撞上初始化窗口时，绑定返回**零值 Settings**（`mgr == nil` 保护分支）
+2. 前端语言同步副作用把零值设置写回磁盘 → apiEnabled=false（API 静默关闭）
+3. 引擎启动无条件把加载结果写回 tasks.json——某次启动读到空/缺失（安装器 SIGKILL 与落盘竞态）后，空列表被固化覆盖
+
+**修复**：
+
+- `GetTasks/GetStats/GetSettings/QueueStatus` 未就绪时返回**错误**（前端 reject）而不是零值；前端启动加载带**有限自愈重试**，设置/任务在引擎就绪前保持 null 而不是假数据
+- `SaveTasks` 双缓冲：主文件落盘后同步写 `.bak`；`LoadTasks` 主文件缺失/损坏时回退上一代备份（最多丢一次增量，杜绝「空列表固化覆盖」）
+- 桌面端同步获得以上加固（引擎双侧同源）
+
+**测试通道备注**：本轮后段 `screencap`/`screenrecord` 全黑，排查为显示管线 `FLAG_SECURE` 全局生效（误触启动器上的 Facebook 引入其防截屏窗口且状态残留，重启后仍未恢复——设备侧系统状态，与应用无关）。故本节验证以行为断言（topResumedActivity/进程存活/REST JSON）完成，视觉证据见更新前的截图。
+
+### 3.6 测试方法备注
 
 - `screencap` 全黑为 MIUI 系统限制（与应用无关，桌面截图同样全黑）；`screenrecord + ffmpeg` 不受限，作为视觉证据通道。
 - `x86_64` 的 libwails.so 未随本轮重编（`android:package` 默认仅 arm64）；模拟器包请用 `ARCH=amd64` 或 `package:fat`。
