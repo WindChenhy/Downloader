@@ -4,6 +4,7 @@ import type {SpeedPoint, Stats} from '../types';
 import {t, useI18n} from '../i18n';
 import {api} from '../api';
 import {formatBytes, formatDuration, formatSpeed} from '../lib/format';
+import {registerBackHandler} from '../lib/backHandler';
 import {chartWindow, fillDays, niceMax, windowLabel} from '../lib/stats';
 import SpeedChart from './SpeedChart';
 
@@ -28,6 +29,17 @@ export default function StatsPage({onBack}: Props) {
   const [stats, setStats] = useState<Stats | null>(null);
   const [error, setError] = useState('');
   const [picked, setPicked] = useState('');
+  // 任务选择弹层：原生 select 的系统弹窗无法跟随主题（亮底系统 radio），
+  // 换成与主题一致的自定义面板
+  const [pickerOpen, setPickerOpen] = useState(false);
+  // Android 返回键：选择弹层打开时先关弹层
+  useEffect(() => {
+    if (!pickerOpen) return;
+    return registerBackHandler(() => {
+      setPickerOpen(false);
+      return true;
+    });
+  }, [pickerOpen]);
   // 所选任务的曲线：GetStats 汇总不再带 samples，单独按需拉取
   const [taskSamples, setTaskSamples] = useState<SpeedPoint[]>([]);
   // 引擎 500ms 推一次进度，但统计接口是拉取的：曲线本身 2s 一个采样点，
@@ -157,15 +169,55 @@ export default function StatsPage({onBack}: Props) {
           <div className="field-grid">
             <label className="field">
               <span>{tr('任务')}</span>
-              <select value={taskStat?.taskId ?? ''} onChange={(e) => setPicked(e.target.value)}>
-                {(stats?.tasks ?? []).map((x) => (
-                  <option key={x.taskId} value={x.taskId}>
-                    {x.fileName || x.url}
-                  </option>
-                ))}
-              </select>
+              <button
+                type="button"
+                className="picker-trigger"
+                onClick={() => setPickerOpen(true)}
+              >
+                <span className="picker-trigger-name">
+                  {taskStat ? taskStat.fileName || taskStat.url : tr('选择任务')}
+                </span>
+                <em className="collapse-caret">▾</em>
+              </button>
             </label>
           </div>
+          {pickerOpen && (
+            <div
+              className="overlay picker-overlay"
+              onMouseDown={(e) => e.target === e.currentTarget && setPickerOpen(false)}
+            >
+              <div className="picker-panel">
+                <h3>{tr('选择任务')}</h3>
+                <div className="picker-list">
+                  {(stats?.tasks ?? []).map((x) => {
+                    const active = x.taskId === (taskStat?.taskId ?? '');
+                    return (
+                      <button
+                        key={x.taskId}
+                        type="button"
+                        className={`picker-item${active ? ' active' : ''}`}
+                        onClick={() => {
+                          setPicked(x.taskId);
+                          setPickerOpen(false);
+                        }}
+                      >
+                        <span className="picker-item-name">{x.fileName || x.url}</span>
+                        <span className="picker-item-meta">
+                          {active ? '✓ ' : ''}
+                          {formatBytes(x.bytes)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="picker-actions">
+                  <button className="btn ghost" onClick={() => setPickerOpen(false)}>
+                    {tr('取消')}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           {taskStat && (
             <>
               <div className="stats-task-meta">

@@ -1366,3 +1366,99 @@ select,
     -webkit-tap-highlight-color: transparent;
   }
 }
+
+/* ---------- 任务选择弹层（替代原生 select 的系统弹窗，跟随主题） ---------- */
+.picker-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  padding: 8px 10px;
+  cursor: pointer;
+  text-align: left;
+}
+.picker-trigger-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.picker-trigger .collapse-caret {
+  flex-shrink: 0;
+  color: var(--text-dim);
+  font-style: normal;
+}
+.picker-panel {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px;
+  width: 100%;
+  max-width: 420px;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+}
+.picker-panel h3 {
+  margin: 0 0 10px;
+}
+.picker-list {
+  overflow-y: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.picker-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
+.picker-item:hover {
+  background: var(--bg-hover);
+}
+.picker-item.active {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+  color: var(--accent);
+  font-weight: 600;
+}
+.picker-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.picker-item-meta {
+  flex-shrink: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.picker-item.active .picker-item-meta {
+  color: var(--accent);
+}
+.picker-actions {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+}

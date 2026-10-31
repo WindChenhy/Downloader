@@ -92,7 +92,12 @@
 
 **测试通道备注**：本轮后段 `screencap`/`screenrecord` 全黑，排查为显示管线 `FLAG_SECURE` 全局生效（误触启动器上的 Facebook 引入其防截屏窗口且状态残留，重启后仍未恢复——设备侧系统状态，与应用无关）。故本节验证以行为断言（topResumedActivity/进程存活/REST JSON）完成，视觉证据见更新前的截图。
 
-### 3.6 测试方法备注
+### 3.6 统计页任务选择器主题化 + 启动器图标（用户新增需求，本轮完成）
+
+- **任务选择器**：原实现用原生 `<select>`，在 Android WebView 上弹出系统白底 radio 弹窗，与主题完全脱节。已替换为主题化自定义面板：遮罩 + 圆角卡片 + 任务名/下载量列表（44px 触控行）+ 选中项 accent 高亮与 ✓；BACK 已接入关闭栈（先关弹层不退出）。证据：[picker-themed.png](assets/picker-themed.png)
+- **启动器图标**：APK 之前用的是 Wails 模板默认「W」图标。已把 v2 品牌图（蓝色渐变 + 白色下载箭头）生成 5 个密度的 `ic_launcher` 与圆形 `ic_launcher_round` 打进 APK。证据：[icon-launcher.png](assets/icon-launcher.png)
+
+### 3.7 测试方法备注
 
 - `screencap` 全黑为 MIUI 系统限制（与应用无关，桌面截图同样全黑）；`screenrecord + ffmpeg` 不受限，作为视觉证据通道。
 - `x86_64` 的 libwails.so 未随本轮重编（`android:package` 默认仅 arm64）；模拟器包请用 `ARCH=amd64` 或 `package:fat`。
