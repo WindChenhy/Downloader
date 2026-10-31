@@ -3,6 +3,7 @@ import {useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent} fro
 import type {Settings} from '../types';
 import {api} from '../api';
 import {parseAndExpandUrls} from '../lib/format';
+import {registerBackHandler} from '../lib/backHandler';
 import {t, useI18n} from '../i18n';
 
 interface Props {
@@ -33,7 +34,8 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
   const [speedLimitKb, setSpeedLimitKb] = useState(0);
   const [cookie, setCookie] = useState('');
   const [referer, setReferer] = useState('');
-  const [authOpen, setAuthOpen] = useState(false);
+  // 高级设置折叠区：默认收起，未展开时全部按默认值执行
+  const [advanced, setAdvanced] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const urlRef = useRef<HTMLTextAreaElement>(null);
@@ -41,9 +43,29 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
   const urls = useMemo(() => parseAndExpandUrls(url), [url]);
   const multi = urls.length > 1;
 
+  // 高级区是否被改过：给折叠开关一个「已自定义」提示，收起也不丢已改的值
+  const advancedTouched =
+    categoryIdx >= 0 ||
+    saveDir.trim() !== settings.saveDir ||
+    priority !== 1 ||
+    speedLimitKb > 0 ||
+    startAtLocal !== '' ||
+    checksumAlgo !== '' ||
+    checksumExpected.trim() !== '' ||
+    cookie.trim() !== '' ||
+    referer.trim() !== '';
+
   useEffect(() => {
     if (initialUrl) setUrl(initialUrl);
   }, [initialUrl]);
+
+  // Android 返回键：先关本弹窗
+  useEffect(() => {
+    return registerBackHandler(() => {
+      onClose();
+      return true;
+    });
+  }, [onClose]);
 
   useEffect(() => {
     autoGrow(urlRef.current);
@@ -144,124 +166,126 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
           />
         </label>
         <label className="field">
-          <span>{t('目录分类')}</span>
-          <select
-            value={categoryIdx}
-            onChange={(e) => {
-              const idx = Number(e.target.value);
-              setCategoryIdx(idx);
-              if (idx >= 0) {
-                const c = settings.dirCategories?.[idx];
-                if (c?.path) setSaveDir(c.path);
-              }
-            }}
-          >
-            <option value={-1}>{t('默认 / 自定义')}</option>
-            {(settings.dirCategories ?? []).map((c, i) => (
-              <option key={i} value={i}>
-                {c.name || t('未命名')}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          <span>{t('保存到')}</span>
+          <span>{t('连接数（1–128）')}</span>
           <input
-            type="text"
-            value={saveDir}
-            placeholder={t('下载目录')}
-            onChange={(e) => {
-              setSaveDir(e.target.value);
-              setCategoryIdx(-1);
-            }}
+            type="number"
+            min={1}
+            max={128}
+            value={connections}
+            onChange={(e) => setConnections(Number(e.target.value))}
           />
         </label>
-        <div className="field-grid">
-          <label className="field">
-            <span>{t('连接数（1–128）')}</span>
-            <input
-              type="number"
-              min={1}
-              max={128}
-              value={connections}
-              onChange={(e) => setConnections(Number(e.target.value))}
-            />
-          </label>
-          <label className="field">
-            <span>{t('优先级')}</span>
-            <select value={priority} onChange={(e) => setPriority(Number(e.target.value))}>
-              <option value={0}>{t('低')}</option>
-              <option value={1}>{t('普通')}</option>
-              <option value={2}>{t('高')}</option>
-            </select>
-          </label>
-          <label className="field">
-            <span>{t('限速（KB/s，0 不限）')}</span>
-            <input
-              type="number"
-              min={0}
-              value={speedLimitKb}
-              onChange={(e) => setSpeedLimitKb(Math.max(0, Number(e.target.value)))}
-            />
-          </label>
-          <label className="field">
-            <span>{t('定时开始（可选）')}</span>
-            <input
-              type="datetime-local"
-              value={startAtLocal}
-              onChange={(e) => setStartAtLocal(e.target.value)}
-            />
-          </label>
-        </div>
-        {!multi && (
-          <div className="field-grid">
-            <label className="field">
-              <span>{t('校验算法（可选）')}</span>
-              <select value={checksumAlgo} onChange={(e) => setChecksumAlgo(e.target.value)}>
-                <option value="">{t('不校验')}</option>
-                <option value="md5">MD5</option>
-                <option value="sha1">SHA1</option>
-                <option value="sha256">SHA256</option>
-              </select>
-            </label>
-            <label className="field">
-              <span>{t('期望校验值（可选）')}</span>
-              <input
-                type="text"
-                value={checksumExpected}
-                placeholder={t('留空则仅计算摘要')}
-                onChange={(e) => setChecksumExpected(e.target.value)}
-              />
-            </label>
-          </div>
-        )}
-        <button type="button" className="btn small ghost collapse-toggle" onClick={() => setAuthOpen(!authOpen)}>
-          {t('认证（可选）')}{cookie || referer ? t(' · 已填写') : ''}
-          <em className="collapse-caret">{authOpen ? '▴' : '▾'}</em>
+        <button type="button" className="btn small ghost collapse-toggle" onClick={() => setAdvanced(!advanced)}>
+          {t('高级设置')}{advancedTouched ? t(' · 已自定义') : ''}
+          <em className="collapse-caret">{advanced ? '▴' : '▾'}</em>
         </button>
-        {authOpen && (
-          <div className="field-grid">
-            <label className="field">
-              <span>{t('Cookie')}</span>
-              <input
-                type="text"
-                value={cookie}
-                spellCheck={false}
-                placeholder={t('从浏览器复制，如 sid=abc; token=def')}
-                onChange={(e) => setCookie(e.target.value)}
-              />
-            </label>
-            <label className="field">
-              <span>{t('Referer')}</span>
-              <input
-                type="text"
-                value={referer}
-                spellCheck={false}
-                placeholder={t('防盗链站点常需，如 https://site.example/page')}
-                onChange={(e) => setReferer(e.target.value)}
-              />
-            </label>
-          </div>
+        {advanced && (
+          <>
+            <div className="field-grid">
+              <label className="field">
+                <span>{t('目录分类')}</span>
+                <select
+                  value={categoryIdx}
+                  onChange={(e) => {
+                    const idx = Number(e.target.value);
+                    setCategoryIdx(idx);
+                    if (idx >= 0) {
+                      const c = settings.dirCategories?.[idx];
+                      if (c?.path) setSaveDir(c.path);
+                    }
+                  }}
+                >
+                  <option value={-1}>{t('默认 / 自定义')}</option>
+                  {(settings.dirCategories ?? []).map((c, i) => (
+                    <option key={i} value={i}>
+                      {c.name || t('未命名')}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>{t('保存到')}</span>
+                <input
+                  type="text"
+                  value={saveDir}
+                  placeholder={t('下载目录')}
+                  onChange={(e) => {
+                    setSaveDir(e.target.value);
+                    setCategoryIdx(-1);
+                  }}
+                />
+              </label>
+              <label className="field">
+                <span>{t('优先级')}</span>
+                <select value={priority} onChange={(e) => setPriority(Number(e.target.value))}>
+                  <option value={0}>{t('低')}</option>
+                  <option value={1}>{t('普通')}</option>
+                  <option value={2}>{t('高')}</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>{t('限速（KB/s，0 不限）')}</span>
+                <input
+                  type="number"
+                  min={0}
+                  value={speedLimitKb}
+                  onChange={(e) => setSpeedLimitKb(Math.max(0, Number(e.target.value)))}
+                />
+              </label>
+              <label className="field">
+                <span>{t('定时开始（可选）')}</span>
+                <input
+                  type="datetime-local"
+                  value={startAtLocal}
+                  onChange={(e) => setStartAtLocal(e.target.value)}
+                />
+              </label>
+            </div>
+            {!multi && (
+              <div className="field-grid">
+                <label className="field">
+                  <span>{t('校验算法（可选）')}</span>
+                  <select value={checksumAlgo} onChange={(e) => setChecksumAlgo(e.target.value)}>
+                    <option value="">{t('不校验')}</option>
+                    <option value="md5">MD5</option>
+                    <option value="sha1">SHA1</option>
+                    <option value="sha256">SHA256</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>{t('期望校验值（可选）')}</span>
+                  <input
+                    type="text"
+                    value={checksumExpected}
+                    placeholder={t('留空则仅计算摘要')}
+                    onChange={(e) => setChecksumExpected(e.target.value)}
+                  />
+                </label>
+              </div>
+            )}
+            <div className="field-grid">
+              <label className="field">
+                <span>{t('Cookie（可选）')}</span>
+                <input
+                  type="text"
+                  value={cookie}
+                  spellCheck={false}
+                  placeholder={t('从浏览器复制，如 sid=abc; token=def')}
+                  onChange={(e) => setCookie(e.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>{t('Referer（可选）')}</span>
+                <input
+                  type="text"
+                  value={referer}
+                  spellCheck={false}
+                  placeholder={t('防盗链站点常需，如 https://site.example/page')}
+                  onChange={(e) => setReferer(e.target.value)}
+                />
+              </label>
+            </div>
+          </>
         )}
         </div>
         {error && <div className="dialog-error" style={{whiteSpace: 'pre-wrap'}}>{error}</div>}

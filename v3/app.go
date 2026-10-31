@@ -153,11 +153,14 @@ func (s *AppService) ServiceShutdown() error {
 }
 
 // GetTasks 返回全部任务（含实时进度）。
-func (s *AppService) GetTasks() []engine.Task {
+// 引擎未就绪时返回错误而不是零值：Android 上 WebView 先于 ServiceStartup
+// 就绪，前端首帧的轮询会撞上初始化窗口——返回零值会让前端把空态当成真数据，
+// 语言同步等副作用还会把零值设置写回磁盘（真实事故：设置被清空）。
+func (s *AppService) GetTasks() ([]engine.Task, error) {
 	if s.mgr == nil {
-		return nil
+		return nil, errNotReady
 	}
-	return s.mgr.GetTasks()
+	return s.mgr.GetTasks(), nil
 }
 
 // Platform 返回运行平台（runtime.GOOS）：android / windows / darwin / linux。
@@ -238,12 +241,12 @@ func (s *AppService) SetQueueSuspended(v bool) error {
 }
 
 // QueueStatus 队列放行状态：用户总闸、带宽时间窗、因磁盘空间不足停在队列里的任务数。
-// 三者都会让任务停在「排队中」，界面据此区分文案。
-func (s *AppService) QueueStatus() engine.QueueStatus {
+// 三者都会让任务停在「排队中」，界面据此区分文案。未就绪时返回错误，理由同 GetTasks。
+func (s *AppService) QueueStatus() (engine.QueueStatus, error) {
 	if s.mgr == nil {
-		return engine.QueueStatus{}
+		return engine.QueueStatus{}, errNotReady
 	}
-	return s.mgr.QueueStatus()
+	return s.mgr.QueueStatus(), nil
 }
 
 // SetQueueWindow 配置带宽时间窗：窗外不启动新任务（正在下载的不受影响），状态持久化。
@@ -254,12 +257,12 @@ func (s *AppService) SetQueueWindow(enabled bool, start, end string) error {
 	return s.mgr.SetQueueWindow(enabled, start, end)
 }
 
-// GetStats 返回下载统计与速度曲线（统计页轮询用）。
-func (s *AppService) GetStats() engine.Stats {
+// GetStats 返回下载统计与速度曲线（统计页轮询用）。未就绪时返回错误，理由同 GetTasks。
+func (s *AppService) GetStats() (engine.Stats, error) {
 	if s.mgr == nil {
-		return engine.Stats{}
+		return engine.Stats{}, errNotReady
 	}
-	return s.mgr.GetStats()
+	return s.mgr.GetStats(), nil
 }
 
 // GetTaskStats 返回单任务曲线（统计页选中任务时按需拉取；GetStats 的
@@ -363,12 +366,13 @@ func (s *AppService) RemoveTask(id string, deleteFiles bool) error {
 	return s.mgr.RemoveTask(id, deleteFiles)
 }
 
-// GetSettings 返回全局设置。
-func (s *AppService) GetSettings() engine.Settings {
+// GetSettings 返回全局设置。未就绪时返回错误而不是零值——零值一旦被前端
+// 的语言同步等副作用写回，用户设置就会被清空（真实事故）。
+func (s *AppService) GetSettings() (engine.Settings, error) {
 	if s.mgr == nil {
-		return engine.Settings{}
+		return engine.Settings{}, errNotReady
 	}
-	return s.mgr.GetSettings()
+	return s.mgr.GetSettings(), nil
 }
 
 // SaveSettings 保存设置并同步通知开关缓存与 REST API 启停。

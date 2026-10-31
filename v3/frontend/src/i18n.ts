@@ -236,6 +236,8 @@ const EN: Record<string, string> = {
   '（批量）': '(batch)',
   '认证（可选）': 'Authentication (optional)',
   ' · 已填写': ' · filled in',
+  '高级设置': 'Advanced settings',
+  ' · 已自定义': ' · customized',
   '从浏览器复制，如 sid=abc; token=def': 'Copy from the browser, e.g. sid=abc; token=def',
   '防盗链站点常需，如 https://site.example/page':
     'Often required by hotlink protection, e.g. https://site.example/page',

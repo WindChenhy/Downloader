@@ -9,6 +9,7 @@ import {api} from '../api';
 import {FolderIcon, PauseIcon, PlayIcon, RetryIcon, TrashIcon} from './icons';
 import DeleteTaskDialog from './DeleteTaskDialog';
 import TaskDetailDialog from './TaskDetailDialog';
+import {registerBackHandler} from '../lib/backHandler';
 
 interface Props {
   tasks: Task[];
@@ -192,6 +193,23 @@ export default function TaskList({tasks, onChanged, onSettingsChanged}: Props) {
   const [confirmClear, setConfirmClear] = useState(false);
   const noticeTimer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(noticeTimer.current), []);
+
+  // Android 返回键/侧滑：详情与删除确认打开时，返回先关弹窗
+  useEffect(() => {
+    if (!detailId) return;
+    return registerBackHandler(() => {
+      setDetailId(null);
+      return true;
+    });
+  }, [detailId]);
+
+  useEffect(() => {
+    if (!deleteTarget) return;
+    return registerBackHandler(() => {
+      setDeleteTarget(null);
+      return true;
+    });
+  }, [deleteTarget]);
 
   const flash = (msg: string) => {
     setNotice(msg);

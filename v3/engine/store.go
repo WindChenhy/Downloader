@@ -339,16 +339,37 @@ func (s *Store) SaveSettings(st Settings) error {
 }
 
 func (s *Store) LoadTasks() ([]Task, error) {
-	var tasks []Task
-	err := readJSON(s.TasksPath(), &tasks)
-	if errors.Is(err, fs.ErrNotExist) {
+	tasks, err := loadTasksFile(s.TasksPath())
+	if err == nil {
+		return tasks, nil
+	}
+	// 主文件缺失/损坏时回退上一代备份（SaveTasks 每次落盘都会同步写 .bak）：
+	// 安装器杀进程、断电等极端时序下主文件可能丢失，双缓冲最多丢一次增量，
+	// 避免启动读到空列表后又把空列表覆盖写回、造成任务全灭
+	tasks, bakErr := loadTasksFile(s.TasksPath() + ".bak")
+	if bakErr == nil {
+		return tasks, nil
+	}
+	if errors.Is(err, fs.ErrNotExist) && errors.Is(bakErr, fs.ErrNotExist) {
 		return nil, nil
 	}
-	return tasks, err
+	return nil, err
+}
+
+func loadTasksFile(path string) ([]Task, error) {
+	var tasks []Task
+	if err := readJSON(path, &tasks); err != nil {
+		return nil, err
+	}
+	return tasks, nil
 }
 
 func (s *Store) SaveTasks(tasks []Task) error {
-	return writeJSONAtomic(s.TasksPath(), tasks)
+	if err := writeJSONAtomic(s.TasksPath(), tasks); err != nil {
+		return err
+	}
+	// 双缓冲：主文件写成功后，把同一份内容落一份到 .bak
+	return writeJSONAtomic(s.TasksPath()+".bak", tasks)
 }
 
 var idCounter atomic.Uint32

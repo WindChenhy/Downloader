@@ -113,6 +113,26 @@ public class MainActivity extends AppCompatActivity {
         // Set up WebView
         setupWebView();
 
+        // 返回键/侧滑手势：先问前端能否消费（关弹窗/回列表页，见 window.__wailsBack）；
+        // 前端已在首页且无弹窗时未消费 → moveTaskToBack 退到后台保活下载，
+        // 而不是结束 Activity/进程。
+        getOnBackPressedDispatcher().addCallback(this, new androidx.activity.OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                if (webView == null) {
+                    moveTaskToBack(true);
+                    return;
+                }
+                webView.evaluateJavascript(
+                        "(window.__wailsBack ? (window.__wailsBack() ? \"consumed\" : \"default\") : \"default\")",
+                        value -> {
+                            if (value == null || !value.contains("consumed")) {
+                                moveTaskToBack(true);
+                            }
+                        });
+            }
+        });
+
         // Load the application
         loadApplication();
     }

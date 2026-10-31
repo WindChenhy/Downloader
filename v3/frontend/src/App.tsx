@@ -10,6 +10,7 @@ import AddTaskDialog from './components/AddTaskDialog';
 import SettingsPage from './components/SettingsPage';
 import StatsPage from './components/StatsPage';
 import CloseConfirmDialog from './components/CloseConfirmDialog';
+import {handleAppBack, registerBackHandler} from './lib/backHandler';
 import {ChartIcon, GearIcon, MonitorIcon, MoonIcon, PlusIcon, SunIcon} from './components/icons';
 
 function loadTheme(): ThemeMode {
@@ -28,12 +29,65 @@ export default function App() {
   const [theme, setTheme] = useState<ThemeMode>(loadTheme);
   const [accent, setAccent] = useState(() => localStorage.getItem('accent') ?? 'blue');
 
+  // Android 返回键/侧滑：Java 侧拦截后经 window.__wailsBack 询问前端是否消费——
+  // 栈里有可关闭界面（弹窗/设置/统计视图）就关最上层；已在首页则交回系统退到后台
+  //（moveTaskToBack，进程与下载保活），而不是结束应用。
+  useEffect(() => {
+    (window as unknown as {__wailsBack: () => boolean}).__wailsBack = () => handleAppBack();
+  }, []);
+
+  // 设置/统计视图：返回先回列表页
+  useEffect(() => {
+    if (view === 'list') return;
+    return registerBackHandler(() => {
+      setView('list');
+      return true;
+    });
+  }, [view]);
+
+  // 新建下载弹窗
+  useEffect(() => {
+    if (!showDialog) return;
+    return registerBackHandler(() => {
+      setShowDialog(false);
+      setPrefillUrl('');
+      return true;
+    });
+  }, [showDialog]);
+
+  // 关闭确认弹窗
+  useEffect(() => {
+    if (!showCloseConfirm) return;
+    return registerBackHandler(() => {
+      setShowCloseConfirm(false);
+      return true;
+    });
+  }, [showCloseConfirm]);
+
+  // 启动自愈：Android 上 ServiceStartup 与 WebView 就绪存在竞态，引擎未就绪时
+  // 绑定调用会 reject——有限重试直到就绪，而不是把失败当空态定格
   const refresh = useCallback(() => {
-    api.getTasks().then(setTasks).catch(() => {});
+    const attempt = (left: number) => {
+      api
+        .getTasks()
+        .then(setTasks)
+        .catch(() => {
+          if (left > 0) window.setTimeout(() => attempt(left - 1), 400);
+        });
+    };
+    attempt(25);
   }, []);
 
   const refreshSettings = useCallback(() => {
-    api.getSettings().then(setSettings).catch(() => {});
+    const attempt = (left: number) => {
+      api
+        .getSettings()
+        .then(setSettings)
+        .catch(() => {
+          if (left > 0) window.setTimeout(() => attempt(left - 1), 400);
+        });
+    };
+    attempt(25);
   }, []);
 
   // 主题三态：light / dark / 跟随系统（监听系统切换实时生效）
