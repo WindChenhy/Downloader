@@ -1,0 +1,23 @@
+# 构建产物
+bin/
+frontend/dist/
+build/windows/*.syso
+
+# 前端
+frontend/node_modules/
+
+# Android：gradle 与 NDK 编译产物
+build/android/app/src/main/jniLibs/
+build/android/app/build/
+build/android/.gradle/
+build/android/build/
+build/android/local.properties
+build/android/captures/
+
+# wails3 生成的文件（`wails3 task android:build` 自动再生成）
+build/android/overlay.json
+build/android/gen/
+
+# Task 运行时状态
+.task/
+docs/

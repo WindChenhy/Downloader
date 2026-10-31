@@ -118,8 +118,12 @@ type Settings struct {
 	// API/导入允许的保存目录白名单（默认下载目录始终允许）；
 	// 空 = 仅默认下载目录。用于阻断经接口向任意目录写/删文件
 	AllowSaveDirs []string      `json:"allowSaveDirs,omitempty"`
-	CloseAction   string        `json:"closeAction"`   // ask | exit | minimize
-	DirCategories []DirCategory `json:"dirCategories"` // 下载目录分类
+	CloseAction   string        `json:"closeAction"` // ask | exit | minimize
+	// MinimizeToTray 点击最小化按钮时隐藏到系统托盘而不是最小化到任务栏
+	//（仅桌面端生效，默认 false）。引擎只负责存取，行为由应用层实现。
+	// v2/v3 共享同一份 settings.json，两侧引擎字段必须同步，否则互相覆盖丢字段。
+	MinimizeToTray bool          `json:"minimizeToTray"`
+	DirCategories  []DirCategory `json:"dirCategories"` // 下载目录分类
 	AutoExtract   bool          `json:"autoExtract"`   // 下载完成后自动解压压缩包
 	// 系统通知：完成/失败默认开，创建/暂停默认关，均可配置
 	NotifyOnCreate   bool `json:"notifyOnCreate"`
@@ -335,16 +339,37 @@ func (s *Store) SaveSettings(st Settings) error {
 }
 
 func (s *Store) LoadTasks() ([]Task, error) {
-	var tasks []Task
-	err := readJSON(s.TasksPath(), &tasks)
-	if errors.Is(err, fs.ErrNotExist) {
+	tasks, err := loadTasksFile(s.TasksPath())
+	if err == nil {
+		return tasks, nil
+	}
+	// 主文件缺失/损坏时回退上一代备份（SaveTasks 每次落盘都会同步写 .bak）：
+	// 安装器杀进程、断电等极端时序下主文件可能丢失，双缓冲最多丢一次增量，
+	// 避免启动读到空列表后又把空列表覆盖写回、造成任务全灭
+	tasks, bakErr := loadTasksFile(s.TasksPath() + ".bak")
+	if bakErr == nil {
+		return tasks, nil
+	}
+	if errors.Is(err, fs.ErrNotExist) && errors.Is(bakErr, fs.ErrNotExist) {
 		return nil, nil
 	}
-	return tasks, err
+	return nil, err
+}
+
+func loadTasksFile(path string) ([]Task, error) {
+	var tasks []Task
+	if err := readJSON(path, &tasks); err != nil {
+		return nil, err
+	}
+	return tasks, nil
 }
 
 func (s *Store) SaveTasks(tasks []Task) error {
-	return writeJSONAtomic(s.TasksPath(), tasks)
+	if err := writeJSONAtomic(s.TasksPath(), tasks); err != nil {
+		return err
+	}
+	// 双缓冲：主文件写成功后，把同一份内容落一份到 .bak
+	return writeJSONAtomic(s.TasksPath()+".bak", tasks)
 }
 
 var idCounter atomic.Uint32

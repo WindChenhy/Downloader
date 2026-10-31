@@ -85,6 +85,9 @@ export interface Settings {
   /** API/导入允许的保存目录白名单；空 = 仅默认下载目录 */
   allowSaveDirs?: string[];
   closeAction: CloseAction;
+  /** v3 新增：点击最小化按钮时隐藏到系统托盘；v2 不渲染开关，仅透传保存，
+   *  防止 v2 保存设置时丢掉 v3 写入的该字段（两侧共享 settings.json） */
+  minimizeToTray?: boolean;
   dirCategories: DirCategory[];
   autoExtract: boolean;
   /** 系统通知：完成/失败默认开，创建/暂停默认关 */
