@@ -96,6 +96,7 @@
 
 - **任务选择器**：原实现用原生 `<select>`，在 Android WebView 上弹出系统白底 radio 弹窗，与主题完全脱节。已替换为主题化自定义面板：遮罩 + 圆角卡片 + 任务名/下载量列表（44px 触控行）+ 选中项 accent 高亮与 ✓；BACK 已接入关闭栈（先关弹层不退出）。证据：[picker-themed.png](assets/picker-themed.png)
 - **启动器图标**：APK 之前用的是 Wails 模板默认「W」图标。已把 v2 品牌图（蓝色渐变 + 白色下载箭头）生成 5 个密度的 `ic_launcher` 与圆形 `ic_launcher_round` 打进 APK。证据：[icon-launcher.png](assets/icon-launcher.png)
+- **选择器点按蓝框修复**（用户反馈）：点击选择器触发按钮时闪现系统级半透明蓝底方框（Android WebView 默认 `-webkit-tap-highlight-color`），直到弹层出现才消失。已全局关闭系统点按高亮（`button/.task-row/.filter-chip/.picker-trigger`），按压反馈改由主题 `:active` 表达、键盘聚焦保留 `:focus-visible` 轮廓（a11y）。验证：30fps 录屏逐帧检查点击瞬间，仅有「列表 → 弹层」两个离散状态，无任何蓝框中间帧。
 
 ### 3.7 测试方法备注
 

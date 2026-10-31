@@ -1358,13 +1358,15 @@ select,
   .field-grid {
     grid-template-columns: 1fr;
   }
+}
 
-  /* 触屏：去掉点按高亮残影 */
-  .task-row,
-  .btn,
-  .filter-chip {
-    -webkit-tap-highlight-color: transparent;
-  }
+/* 触屏：全局关闭系统点按高亮（Android WebView 按下时会画半透明蓝底方框，
+   抬起才消失）——按压反馈改由各组件自己的 :active 主题样式表达 */
+button,
+.task-row,
+.filter-chip,
+.picker-trigger {
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* ---------- 任务选择弹层（替代原生 select 的系统弹窗，跟随主题） ---------- */
@@ -1461,4 +1463,16 @@ select,
   margin-top: 12px;
   display: flex;
   justify-content: flex-end;
+}
+
+/* 选择器触发按钮：系统高亮已全局关闭，按压态用主题色表达；
+   键盘聚焦保留可见轮廓（a11y），触摸聚焦不画框 */
+.picker-trigger:active {
+  background: var(--bg-hover);
+}
+.picker-trigger:focus {
+  outline: none;
+}
+.picker-trigger:focus-visible {
+  outline: 2px solid var(--accent);
 }
