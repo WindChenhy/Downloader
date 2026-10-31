@@ -117,6 +117,14 @@ export function PauseTask(id: string): $CancellablePromise<void> {
 }
 
 /**
+ * Platform 返回运行平台（runtime.GOOS）：android / windows / darwin / linux。
+ * 前端据此隐藏平台不存在的设置项（如移动端的窗口/剪贴板监听）。
+ */
+export function Platform(): $CancellablePromise<string> {
+    return $Call.ByID(3813859089);
+}
+
+/**
  * QueueStatus 队列放行状态：用户总闸、带宽时间窗、因磁盘空间不足停在队列里的任务数。
  * 三者都会让任务停在「排队中」，界面据此区分文案。
  */

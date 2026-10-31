@@ -94,6 +94,18 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
+        // 系统栏 insets 内收：WebView 默认铺满整窗（Android 15+ 强制 edge-to-edge），
+        // 应用头部会垫在状态栏下面——可见但点不到（状态栏窗口拦截触摸）。
+        // 给容器加系统栏内边距，让 WebView 内容从状态栏下方开始；
+        // 状态栏底色与应用背景一致（themes.xml），视觉无缝。
+        android.view.View container = findViewById(R.id.main_container);
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(container, (v, windowInsets) -> {
+            androidx.core.graphics.Insets bars = windowInsets.getInsets(
+                    androidx.core.view.WindowInsetsCompat.Type.systemBars());
+            v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+            return androidx.core.view.WindowInsetsCompat.CONSUMED;
+        });
+
         // Initialize the native Go library
         bridge = new WailsBridge(this);
         bridge.initialize();

@@ -5,6 +5,8 @@ import type {AddTaskParams, BatchAddResult, QueueStatus, Settings, Stats, Task, 
 // 绑定由 `wails3 generate bindings` 自动生成（frontend/bindings，JSDoc 类型）；
 // 这里统一收口并转换为本项目的类型。方法名与 v2 保持一致。
 export const api = {
+  // 运行平台（runtime.GOOS）：android / windows / darwin / linux
+  platform: (): Promise<string> => AppService.Platform() as unknown as Promise<string>,
   getTasks: (): Promise<Task[]> => AppService.GetTasks() as unknown as Promise<Task[]>,
   addTask: (url: string, saveDir: string, connections: number, customName: string): Promise<Task> =>
     AppService.AddTask(url, saveDir, connections, customName) as unknown as Promise<Task>,

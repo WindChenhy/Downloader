@@ -62,6 +62,11 @@ export default function SettingsPage({
   onBack,
 }: Props) {
   const {t} = useI18n();
+  // 移动端（android/ios）隐藏桌面专属设置：关闭行为/托盘/剪贴板监听
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    api.platform().then((p) => setIsMobile(p === 'android' || p === 'ios')).catch(() => {});
+  }, []);
   const [form, setForm] = useState<Settings>({
     ...settings,
     closeAction: settings.closeAction ?? 'ask',
@@ -520,42 +525,48 @@ export default function SettingsPage({
         </label>
       </div>
 
-      <h3>{t('窗口')}</h3>
-      <div className="field">
-        <span>{t('点击关闭按钮时')}</span>
-        <div className="segmented">
-          {(
-            [
-              {key: 'ask', label: '每次询问'},
-              {key: 'exit', label: '直接退出'},
-              {key: 'minimize', label: '最小化到托盘'},
-            ] as const
-          ).map((o) => (
-            <button
-              key={o.key}
-              type="button"
-              className={(form.closeAction ?? 'ask') === o.key ? 'active' : ''}
-              onClick={() => set({closeAction: o.key})}
-            >
-              <span>{t(o.label)}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-      <Switch
-        checked={form.minimizeToTray ?? false}
-        onChange={(v) => set({minimizeToTray: v})}
-        label={t('最小化时隐藏到托盘')}
-        hint={t('点击最小化按钮时隐藏到系统托盘，不占任务栏；从托盘图标唤回')}
-      />
+      {!isMobile && (
+        <>
+          <h3>{t('窗口')}</h3>
+          <div className="field">
+            <span>{t('点击关闭按钮时')}</span>
+            <div className="segmented">
+              {(
+                [
+                  {key: 'ask', label: '每次询问'},
+                  {key: 'exit', label: '直接退出'},
+                  {key: 'minimize', label: '最小化到托盘'},
+                ] as const
+              ).map((o) => (
+                <button
+                  key={o.key}
+                  type="button"
+                  className={(form.closeAction ?? 'ask') === o.key ? 'active' : ''}
+                  onClick={() => set({closeAction: o.key})}
+                >
+                  <span>{t(o.label)}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <Switch
+            checked={form.minimizeToTray ?? false}
+            onChange={(v) => set({minimizeToTray: v})}
+            label={t('最小化时隐藏到托盘')}
+            hint={t('点击最小化按钮时隐藏到系统托盘，不占任务栏；从托盘图标唤回')}
+          />
+        </>
+      )}
 
       <h3>{t('集成')}</h3>
-      <Switch
-        checked={form.clipboardWatch}
-        onChange={(v) => set({clipboardWatch: v})}
-        label={t('剪贴板监听')}
-        hint={t('复制下载链接时自动弹出新建下载')}
-      />
+      {!isMobile && (
+        <Switch
+          checked={form.clipboardWatch}
+          onChange={(v) => set({clipboardWatch: v})}
+          label={t('剪贴板监听')}
+          hint={t('复制下载链接时自动弹出新建下载')}
+        />
+      )}
       <Switch
         checked={form.apiEnabled}
         onChange={(v) => set({apiEnabled: v})}

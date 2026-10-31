@@ -160,6 +160,12 @@ func (s *AppService) GetTasks() []engine.Task {
 	return s.mgr.GetTasks()
 }
 
+// Platform 返回运行平台（runtime.GOOS）：android / windows / darwin / linux。
+// 前端据此隐藏平台不存在的设置项（如移动端的窗口/剪贴板监听）。
+func (s *AppService) Platform() string {
+	return runtime.GOOS
+}
+
 // AddTask 新建下载任务；saveDir 为空时使用设置中的默认目录，
 // connections <= 0 时使用默认连接数，customName 为空则自动从链接/响应头获取文件名。
 func (s *AppService) AddTask(url string, saveDir string, connections int, customName string) (engine.Task, error) {
