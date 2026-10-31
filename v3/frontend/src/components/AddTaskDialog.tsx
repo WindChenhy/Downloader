@@ -4,6 +4,7 @@ import type {Settings} from '../types';
 import {api} from '../api';
 import {parseAndExpandUrls} from '../lib/format';
 import {registerBackHandler} from '../lib/backHandler';
+import NumberField from './NumberField';
 import {t, useI18n} from '../i18n';
 
 interface Props {
@@ -167,12 +168,11 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
         </label>
         <label className="field">
           <span>{t('连接数（1–128）')}</span>
-          <input
-            type="number"
+          <NumberField
+            value={connections}
             min={1}
             max={128}
-            value={connections}
-            onChange={(e) => setConnections(Number(e.target.value))}
+            onChange={setConnections}
           />
         </label>
         <button type="button" className="btn small ghost collapse-toggle" onClick={() => setAdvanced(!advanced)}>
@@ -225,11 +225,11 @@ export default function AddTaskDialog({settings, initialUrl, onClose, onAdded}: 
               </label>
               <label className="field">
                 <span>{t('限速（KB/s，0 不限）')}</span>
-                <input
-                  type="number"
-                  min={0}
+                <NumberField
                   value={speedLimitKb}
-                  onChange={(e) => setSpeedLimitKb(Math.max(0, Number(e.target.value)))}
+                  min={0}
+                  max={100000000}
+                  onChange={setSpeedLimitKb}
                 />
               </label>
               <label className="field">

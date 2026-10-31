@@ -6,6 +6,7 @@ import type {LangPref} from '../i18n';
 import {resolveLang, t, useI18n} from '../i18n';
 import {api} from '../api';
 import {MonitorIcon, MoonIcon, PencilIcon, PlusIcon, SunIcon, TrashIcon} from './icons';
+import NumberField from './NumberField';
 
 interface Props {
   settings: Settings;
@@ -254,31 +255,29 @@ export default function SettingsPage({
       <div className="field-grid">
         <label className="field">
           <span>{t('每任务连接数（1–128）')}</span>
-          <input
-            type="number"
+          <NumberField
+            value={form.connections}
             min={1}
             max={128}
-            value={form.connections}
-            onChange={(e) => set({connections: Number(e.target.value)})}
+            onChange={(v) => set({connections: v})}
           />
         </label>
         <label className="field">
           <span>{t('同时下载任务数（1–10）')}</span>
-          <input
-            type="number"
+          <NumberField
+            value={form.concurrentTasks}
             min={1}
             max={10}
-            value={form.concurrentTasks}
-            onChange={(e) => set({concurrentTasks: Number(e.target.value)})}
+            onChange={(v) => set({concurrentTasks: v})}
           />
         </label>
         <label className="field">
           <span>{t('限速（KB/s，0 不限速）')}</span>
-          <input
-            type="number"
-            min={0}
+          <NumberField
             value={speedLimitKb}
-            onChange={(e) => set({speedLimit: Math.max(0, Number(e.target.value)) * 1024})}
+            min={0}
+            max={100000000}
+            onChange={(v) => set({speedLimit: v * 1024})}
           />
         </label>
       </div>
@@ -459,11 +458,11 @@ export default function SettingsPage({
         <div className="field-grid">
           <label className="field">
             <span>{t('额外保留空间（MB，0 不留）')}</span>
-            <input
-              type="number"
-              min={0}
+            <NumberField
               value={diskMinFreeMb}
-              onChange={(e) => set({diskMinFree: Math.max(0, Number(e.target.value)) * 1024 * 1024})}
+              min={0}
+              max={1048576}
+              onChange={(v) => set({diskMinFree: v * 1024 * 1024})}
             />
           </label>
         </div>
@@ -577,12 +576,11 @@ export default function SettingsPage({
         <>
           <label className="field">
             <span>{t('API 端口（保存后立即生效）')}</span>
-            <input
-              type="number"
+            <NumberField
+              value={form.apiPort}
               min={1}
               max={65535}
-              value={form.apiPort}
-              onChange={(e) => set({apiPort: Number(e.target.value)})}
+              onChange={(v) => set({apiPort: v})}
             />
           </label>
           <label className="field">
